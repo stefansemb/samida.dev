@@ -75,6 +75,24 @@ class ConversationStore:
                     id TEXT PRIMARY KEY, text TEXT NOT NULL, due_at TEXT NOT NULL,
                     done INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS tool_calls (
+                    id TEXT PRIMARY KEY,
+                    conversation_id TEXT NOT NULL,
+                    tool_name TEXT NOT NULL,
+                    arguments_json TEXT NOT NULL,
+                    risk_level TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'executed', 'failed')),
+                    result_json TEXT,
+                    provider TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    profile TEXT NOT NULL,
+                    working_directory TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    resolved_at TEXT,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_tool_calls_conversation
+                    ON tool_calls(conversation_id, created_at);
                 PRAGMA optimize;
                 """
             )
@@ -84,6 +102,8 @@ class ConversationStore:
             }
             if "ocr_text" not in columns:
                 connection.execute("ALTER TABLE messages ADD COLUMN ocr_text TEXT")
+            if "tool_call_id" not in columns:
+                connection.execute("ALTER TABLE messages ADD COLUMN tool_call_id TEXT REFERENCES tool_calls(id)")
             research_columns = {row["name"] for row in connection.execute("PRAGMA table_info(research_reports)").fetchall()}
             if "research_type" not in research_columns:
                 connection.execute("ALTER TABLE research_reports ADD COLUMN research_type TEXT NOT NULL DEFAULT 'ai_general'")
@@ -221,8 +241,11 @@ class ConversationStore:
         self.get_conversation(conversation_id)
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT id, role, content, image_filename, ocr_text, created_at "
-                "FROM messages WHERE conversation_id = ? ORDER BY created_at",
+                "SELECT m.id, m.role, m.content, m.image_filename, m.ocr_text, m.created_at, "
+                "tc.id AS tc_id, tc.tool_name AS tc_tool_name, tc.arguments_json AS tc_arguments_json, "
+                "tc.risk_level AS tc_risk_level, tc.status AS tc_status, tc.created_at AS tc_created_at "
+                "FROM messages m LEFT JOIN tool_calls tc ON tc.id = m.tool_call_id "
+                "WHERE m.conversation_id = ? ORDER BY m.created_at",
                 (conversation_id,),
             ).fetchall()
         return [self._message_dict(row) for row in rows]
@@ -257,6 +280,7 @@ class ConversationStore:
         assistant_content: str,
         image_filename: str | None,
         ocr_text: str | None = None,
+        assistant_tool_call_id: str | None = None,
     ) -> tuple[dict, dict, dict]:
         self.get_conversation(conversation_id)
         user_id = str(uuid4())
@@ -279,9 +303,9 @@ class ConversationStore:
             )
             connection.execute(
                 "INSERT INTO messages "
-                "(id, conversation_id, role, content, image_filename, ocr_text, created_at) "
-                "VALUES (?, ?, 'assistant', ?, NULL, NULL, ?)",
-                (assistant_id, conversation_id, assistant_content, assistant_time),
+                "(id, conversation_id, role, content, image_filename, ocr_text, created_at, tool_call_id) "
+                "VALUES (?, ?, 'assistant', ?, NULL, NULL, ?, ?)",
+                (assistant_id, conversation_id, assistant_content, assistant_time, assistant_tool_call_id),
             )
             connection.execute(
                 "UPDATE conversations SET updated_at = ? WHERE id = ?",
@@ -299,6 +323,92 @@ class ConversationStore:
                 )
         messages = self.messages(conversation_id)
         return self.get_conversation(conversation_id), messages[-2], messages[-1]
+
+    def append_assistant_message(
+        self,
+        conversation_id: str,
+        content: str,
+        tool_call_id: str | None = None,
+    ) -> tuple[dict, dict]:
+        self.get_conversation(conversation_id)
+        message_id = str(uuid4())
+        timestamp = _now()
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO messages "
+                "(id, conversation_id, role, content, image_filename, ocr_text, created_at, tool_call_id) "
+                "VALUES (?, ?, 'assistant', ?, NULL, NULL, ?, ?)",
+                (message_id, conversation_id, content, timestamp, tool_call_id),
+            )
+            connection.execute(
+                "UPDATE conversations SET updated_at = ? WHERE id = ?",
+                (timestamp, conversation_id),
+            )
+        messages = self.messages(conversation_id)
+        return self.get_conversation(conversation_id), messages[-1]
+
+    def create_pending_tool_call(
+        self,
+        conversation_id: str,
+        tool_call_id: str,
+        tool_name: str,
+        arguments: dict,
+        risk_level: str,
+        provider: str,
+        model: str,
+        profile: str,
+        working_directory: str,
+    ) -> dict:
+        self.get_conversation(conversation_id)
+        timestamp = _now()
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO tool_calls "
+                "(id, conversation_id, tool_name, arguments_json, risk_level, status, "
+                "provider, model, profile, working_directory, created_at) "
+                "VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)",
+                (
+                    tool_call_id,
+                    conversation_id,
+                    tool_name,
+                    json.dumps(arguments),
+                    risk_level,
+                    provider,
+                    model,
+                    profile,
+                    working_directory,
+                    timestamp,
+                ),
+            )
+        return self.get_tool_call(tool_call_id)
+
+    def get_tool_call(self, tool_call_id: str) -> dict:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM tool_calls WHERE id = ?", (tool_call_id,)
+            ).fetchone()
+        if row is None:
+            raise NotFoundError("Verktygsanropet finns inte.")
+        return self._tool_call_dict(row)
+
+    def resolve_tool_call(self, tool_call_id: str, status: str, result: dict | None = None) -> dict:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE tool_calls SET status = ?, result_json = ?, resolved_at = ? "
+                "WHERE id = ? AND status = 'pending'",
+                (status, json.dumps(result) if result is not None else None, _now(), tool_call_id),
+            )
+        if cursor.rowcount == 0:
+            raise NotFoundError("Verktygsanropet finns inte eller är redan hanterat.")
+        return self.get_tool_call(tool_call_id)
+
+    @staticmethod
+    def _tool_call_dict(row: sqlite3.Row) -> dict:
+        result = dict(row)
+        result["arguments"] = json.loads(result.pop("arguments_json"))
+        raw_result = result.pop("result_json")
+        result["result"] = json.loads(raw_result) if raw_result else None
+        return result
 
     def save_image(self, image: ImageAttachment) -> tuple[str, str]:
         try:
@@ -337,10 +447,27 @@ class ConversationStore:
 
     @staticmethod
     def _message_dict(row: sqlite3.Row) -> dict:
-        result = dict(row)
-        filename = result.pop("image_filename")
-        result["image_url"] = f"/api/attachments/{filename}" if filename else None
-        return result
+        raw = dict(row)
+        filename = raw.pop("image_filename")
+        tc_id = raw.pop("tc_id", None)
+        tool_call = None
+        if tc_id:
+            tool_call = {
+                "id": tc_id,
+                "tool_name": raw.pop("tc_tool_name"),
+                "arguments": json.loads(raw.pop("tc_arguments_json")),
+                "risk_level": raw.pop("tc_risk_level"),
+                "status": raw.pop("tc_status"),
+                "created_at": raw.pop("tc_created_at"),
+            }
+        else:
+            for key in ("tc_tool_name", "tc_arguments_json", "tc_risk_level", "tc_status", "tc_created_at"):
+                raw.pop(key, None)
+        return {
+            **raw,
+            "image_url": f"/api/attachments/{filename}" if filename else None,
+            "tool_call": tool_call,
+        }
 
     @staticmethod
     def _research_dict(row: sqlite3.Row | dict) -> dict:

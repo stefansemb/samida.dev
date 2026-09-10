@@ -30,12 +30,16 @@ class Settings(BaseSettings):
     project_root: Path = Path(__file__).resolve().parents[2]
     database_path: Path | None = None
     attachments_dir: Path | None = None
+    logs_dir: Path | None = None
 
     def resolved_database_path(self) -> Path:
         return self.database_path or self.project_root / "data" / "samida.db"
 
     def resolved_attachments_dir(self) -> Path:
         return self.attachments_dir or self.project_root / "data" / "attachments"
+
+    def resolved_logs_dir(self) -> Path:
+        return self.logs_dir or self.project_root / "logs"
 
 
 @lru_cache

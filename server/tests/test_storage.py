@@ -99,3 +99,60 @@ def test_research_report_idempotency_key_returns_existing_report(store: Conversa
     assert retry["id"] == first["id"]
     assert retry["content"] == "first"
     assert len(store.list_research_reports("mobile_apps")) == 1
+
+
+def test_pending_tool_call_lifecycle(store: ConversationStore) -> None:
+    conversation = store.create_conversation()
+    created = store.create_pending_tool_call(
+        conversation["id"],
+        "call-1",
+        "write_file",
+        {"path": "notes.md", "content": "hej"},
+        "medium",
+        "openai",
+        "gpt-5.6-terra",
+        "minimal",
+        "C:\\AiProjects\\WebchatDesign",
+    )
+    assert created["status"] == "pending"
+    assert created["arguments"]["path"] == "notes.md"
+
+    fetched = store.get_tool_call("call-1")
+    assert fetched["tool_name"] == "write_file"
+
+    resolved = store.resolve_tool_call("call-1", "executed", {"bytes_written": 3})
+    assert resolved["status"] == "executed"
+    assert resolved["result"] == {"bytes_written": 3}
+
+    with pytest.raises(NotFoundError):
+        store.resolve_tool_call("call-1", "executed", {})
+
+
+def test_messages_expose_tool_call_placeholder(store: ConversationStore) -> None:
+    conversation = store.create_conversation()
+    store.create_pending_tool_call(
+        conversation["id"],
+        "call-2",
+        "write_file",
+        {"path": "a.txt", "content": "x"},
+        "medium",
+        "ollama",
+        "gemma4:e4b",
+        "minimal",
+        "C:\\AiProjects\\WebchatDesign",
+    )
+    store.add_exchange(
+        conversation["id"],
+        "Skriv en fil",
+        "Föreslår att skriva a.txt",
+        None,
+        assistant_tool_call_id="call-2",
+    )
+
+    messages = store.messages(conversation["id"])
+    assistant_message = next(m for m in messages if m["role"] == "assistant")
+    assert assistant_message["tool_call"]["id"] == "call-2"
+    assert assistant_message["tool_call"]["status"] == "pending"
+
+    user_message = next(m for m in messages if m["role"] == "user")
+    assert user_message["tool_call"] is None

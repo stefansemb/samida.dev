@@ -40,6 +40,14 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 
+type PendingToolCall = {
+  id: string;
+  tool_name: string;
+  arguments: Record<string, unknown>;
+  risk_level: 'low' | 'medium';
+  status: 'pending' | 'approved' | 'rejected' | 'executed' | 'failed';
+  created_at: string;
+};
 type Message = {
   id?: string;
   role: 'user' | 'assistant';
@@ -47,6 +55,7 @@ type Message = {
   image_url?: string | null;
   ocr_text?: string | null;
   created_at?: string;
+  tool_call?: PendingToolCall | null;
 };
 type Conversation = {
   id: string;
@@ -79,6 +88,12 @@ type ChatResult = {
   model: string;
   context_files: string[];
   usage?: UsageInfo | null;
+  pending_tool_call?: PendingToolCall | null;
+};
+type ToolCallDecisionResult = {
+  conversation: Conversation;
+  assistant_message: Message;
+  pending_tool_call?: PendingToolCall | null;
 };
 type UsageInfo = {
   input_tokens: number;
@@ -169,6 +184,10 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
+}
+
+function argText(value: unknown): string {
+  return typeof value === 'string' ? value : value == null ? '' : JSON.stringify(value);
 }
 
 function fileToImage(file: File): Promise<PendingImage> {
@@ -370,6 +389,8 @@ export default function Home() {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null);
+  const [pendingToolCall, setPendingToolCall] = useState<PendingToolCall | null>(null);
+  const [resolvingToolCall, setResolvingToolCall] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
   const activeRef = useRef<Conversation | null>(null);
@@ -414,6 +435,7 @@ export default function Home() {
     setContextFiles([]);
     setChatUsage(null);
     setError(null);
+    setPendingToolCall(null);
     return created;
   }, []);
 
@@ -426,6 +448,30 @@ export default function Home() {
     setContextFiles([]);
     setChatUsage(null);
     setError(null);
+    setPendingToolCall(null);
+  }
+
+  async function decideToolCall(decision: 'approve' | 'reject') {
+    const conversation = activeRef.current;
+    if (!pendingToolCall || !conversation) return;
+    setResolvingToolCall(true);
+    try {
+      const result = await requestJson<ToolCallDecisionResult>(
+        `/api/conversations/${conversation.id}/tool-calls/${pendingToolCall.id}/${decision}`,
+        { method: 'POST' },
+      );
+      setMessages((current) => [...current, result.assistant_message]);
+      setActiveConversation(result.conversation);
+      activeRef.current = result.conversation;
+      setPendingToolCall(result.pending_tool_call ?? null);
+      await refreshConversations();
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : 'Verktygsanropet kunde inte hanteras.',
+      );
+    } finally {
+      setResolvingToolCall(false);
+    }
   }
 
   async function saveRename(conversation: Conversation) {
@@ -515,6 +561,7 @@ export default function Home() {
         setLastUsedModel(result.model);
         setLastUsedProvider(result.provider);
         setChatUsage(result.usage ?? null);
+        setPendingToolCall(result.pending_tool_call ?? null);
         await refreshConversations();
         return result;
       } catch (caught) {
@@ -781,6 +828,25 @@ export default function Home() {
                   </details>
                 )}
                 {message.content && <p>{message.content}</p>}
+                {message.tool_call && (
+                  <div className={`tool-call-badge status-${message.tool_call.status}`}>
+                    <ShieldCheck size={13} />
+                    <span>
+                      {message.tool_call.tool_name}
+                      {typeof message.tool_call.arguments.path === 'string'
+                        ? ` · ${message.tool_call.arguments.path}`
+                        : ''}
+                      {' · '}
+                      {{
+                        pending: 'väntar på godkännande',
+                        rejected: 'avvisad',
+                        executed: 'utförd',
+                        failed: 'misslyckades',
+                        approved: 'godkänd',
+                      }[message.tool_call.status]}
+                    </span>
+                  </div>
+                )}
               </div>
             </article>
           ))}
@@ -847,6 +913,37 @@ export default function Home() {
           <AlertDialogFooter>
             <AlertDialogCancel>Avbryt</AlertDialogCancel>
             <AlertDialogAction className="delete-confirm" onClick={() => void deleteConversation()}>Ta bort</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={Boolean(pendingToolCall)}
+        onOpenChange={(open) => !open && setPendingToolCall(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {pendingToolCall?.tool_name === 'write_file' ? 'SAMIDA vill skriva en fil' : 'SAMIDA vill köra ett verktyg'}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingToolCall?.tool_name === 'write_file'
+                ? `Skriva till "${argText(pendingToolCall.arguments.path)}" i ${workingDirectory}. Granska innehållet innan du godkänner.`
+                : `Verktyg: ${pendingToolCall?.tool_name ?? ''}.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {pendingToolCall?.tool_name === 'write_file' && (
+            <pre className="tool-call-preview">
+              {argText(pendingToolCall.arguments.content).slice(0, 800)}
+            </pre>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={resolvingToolCall} onClick={() => void decideToolCall('reject')}>
+              Avvisa
+            </AlertDialogCancel>
+            <AlertDialogAction disabled={resolvingToolCall} onClick={() => void decideToolCall('approve')}>
+              Godkänn
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

@@ -8,6 +8,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+from samida import agent, tools as tool_impl
 from samida.config import Settings, get_settings
 from samida.context import ContextBuilder, ContextError
 from samida.dependencies import (
@@ -17,7 +18,7 @@ from samida.dependencies import (
     get_openai_provider,
     get_ollama_provider,
 )
-from samida.providers import ModelProvider, OllamaProvider, OpenAIProvider, ProviderError
+from samida.providers import ModelProvider, OllamaProvider, OpenAIProvider, ProviderError, ToolCallRequest
 from samida.ocr import OcrService
 from samida.research import run_research
 from samida.camofox import CamoFoxClient
@@ -35,9 +36,11 @@ from samida.schemas import (
     ConversationRename,
     ConversationSummary,
     HealthResponse,
+    PendingToolCall,
     StoredMessage,
     ResearchReport,
     Reminder, ReminderCreate,
+    ToolCallDecisionResponse,
     WorkspacePickResponse,
 )
 from samida.storage import ConversationStore, NotFoundError, StorageError
@@ -135,10 +138,12 @@ async def chat(
         if selected_model is None and any(message.images for message in request.messages):
             selected_model = settings.ollama_vision_model
         resolved_model = selected_model or settings.ollama_chat_model
-        model, message = await provider.chat(
+        turn = await provider.chat(
             [context.system_message, runtime_message(provider, resolved_model), *request.messages],
             selected_model,
         )
+        if turn.message is None:
+            raise ProviderError("Modellen försökte anropa ett verktyg, vilket inte stöds här.")
     except ContextError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except ProviderError as exc:
@@ -146,8 +151,8 @@ async def chat(
 
     return ChatResponse(
         provider=provider.name,
-        model=model,
-        message=message,
+        model=turn.resolved_model,
+        message=turn.message,
         context_files=context.included_files,
         usage=getattr(provider, "last_usage", None),
     )
@@ -325,22 +330,59 @@ async def conversation_chat(
         if image_base64 and request.provider == "ollama":
             selected_model = settings.ollama_vision_model
         resolved_model = selected_model or settings.ollama_chat_model
-        model, answer = await provider.chat(
+        workspace = _resolve_workspace(request.working_directory)
+        turn = await agent.run_turn(
+            provider,
+            selected_model,
             [
                 context.system_message,
                 runtime_message(provider, resolved_model),
                 *model_history,
                 current,
             ],
-            selected_model,
+            workspace=workspace,
+            logs_dir=settings.resolved_logs_dir(),
         )
-        conversation, user_message, assistant_message = store.add_exchange(
-            conversation_id,
-            request.content.strip(),
-            answer.content,
-            image_filename,
-            ocr_text,
-        )
+
+        pending_tool_call: PendingToolCall | None = None
+        if turn.pending_tool_call is not None:
+            call = turn.pending_tool_call
+            risk = tool_impl.RISK_BY_TOOL.get(call.name, "medium")
+            record = store.create_pending_tool_call(
+                conversation_id,
+                call.id,
+                call.name,
+                call.arguments,
+                risk,
+                provider.name,
+                turn.resolved_model,
+                request.profile,
+                request.working_directory or "",
+            )
+            conversation, user_message, assistant_message = store.add_exchange(
+                conversation_id,
+                request.content.strip(),
+                _tool_proposal_text(call),
+                image_filename,
+                ocr_text,
+                assistant_tool_call_id=call.id,
+            )
+            pending_tool_call = PendingToolCall(
+                id=record["id"],
+                tool_name=record["tool_name"],
+                arguments=record["arguments"],
+                risk_level=record["risk_level"],
+                status=record["status"],
+                created_at=record["created_at"],
+            )
+        else:
+            conversation, user_message, assistant_message = store.add_exchange(
+                conversation_id,
+                request.content.strip(),
+                turn.message.content,
+                image_filename,
+                ocr_text,
+            )
     except NotFoundError as exc:
         if image_filename:
             store.attachment_path(image_filename).unlink(missing_ok=True)
@@ -359,11 +401,178 @@ async def conversation_chat(
         user_message=user_message,
         assistant_message=assistant_message,
         provider=provider.name,
-        model=model,
+        model=turn.resolved_model,
         context_files=context.included_files,
         ocr_text=ocr_text,
         usage=getattr(provider, "last_usage", None),
+        pending_tool_call=pending_tool_call,
     )
+
+
+def _resolve_workspace(working_directory: str | None) -> Path | None:
+    if not working_directory or not working_directory.strip():
+        return None
+    candidate = Path(working_directory.strip())
+    return candidate if candidate.is_dir() else None
+
+
+def _tool_proposal_text(call: ToolCallRequest) -> str:
+    if call.name == "write_file":
+        path = call.arguments.get("path", "?")
+        content = call.arguments.get("content", "")
+        lines = content.count("\n") + 1 if content else 0
+        return f'Föreslår att skriva till "{path}" ({lines} rader). Väntar på ditt godkännande.'
+    return f"Föreslår att köra verktyget {call.name}. Väntar på ditt godkännande."
+
+
+@app.post(
+    "/api/conversations/{conversation_id}/tool-calls/{tool_call_id}/approve",
+    response_model=ToolCallDecisionResponse,
+)
+async def approve_tool_call(
+    conversation_id: str,
+    tool_call_id: str,
+    ollama: OllamaProvider = Depends(get_ollama_provider),
+    openai: OpenAIProvider = Depends(get_openai_provider),
+    context_builder: ContextBuilder = Depends(get_context_builder),
+    store: ConversationStore = Depends(get_conversation_store),
+    settings: Settings = Depends(get_settings),
+) -> ToolCallDecisionResponse:
+    return await _resolve_tool_call(
+        conversation_id,
+        tool_call_id,
+        approve=True,
+        ollama=ollama,
+        openai=openai,
+        context_builder=context_builder,
+        store=store,
+        settings=settings,
+    )
+
+
+@app.post(
+    "/api/conversations/{conversation_id}/tool-calls/{tool_call_id}/reject",
+    response_model=ToolCallDecisionResponse,
+)
+async def reject_tool_call(
+    conversation_id: str,
+    tool_call_id: str,
+    ollama: OllamaProvider = Depends(get_ollama_provider),
+    openai: OpenAIProvider = Depends(get_openai_provider),
+    context_builder: ContextBuilder = Depends(get_context_builder),
+    store: ConversationStore = Depends(get_conversation_store),
+    settings: Settings = Depends(get_settings),
+) -> ToolCallDecisionResponse:
+    return await _resolve_tool_call(
+        conversation_id,
+        tool_call_id,
+        approve=False,
+        ollama=ollama,
+        openai=openai,
+        context_builder=context_builder,
+        store=store,
+        settings=settings,
+    )
+
+
+async def _resolve_tool_call(
+    conversation_id: str,
+    tool_call_id: str,
+    *,
+    approve: bool,
+    ollama: OllamaProvider,
+    openai: OpenAIProvider,
+    context_builder: ContextBuilder,
+    store: ConversationStore,
+    settings: Settings,
+) -> ToolCallDecisionResponse:
+    try:
+        record = store.get_tool_call(tool_call_id)
+        if record["conversation_id"] != conversation_id:
+            raise NotFoundError("Verktygsanropet hör inte till denna chatt.")
+        if record["status"] != "pending":
+            raise StorageError("Verktygsanropet är redan hanterat.")
+
+        call = ToolCallRequest(id=record["id"], name=record["tool_name"], arguments=record["arguments"])
+        workspace = _resolve_workspace(record["working_directory"])
+        target = str(call.arguments.get("path", ""))
+
+        if approve:
+            try:
+                outcome = tool_impl.write_file(workspace, target, call.arguments.get("content", ""))
+                status = "executed"
+            except tool_impl.WorkspaceError as exc:
+                outcome = {"error": str(exc)}
+                status = "failed"
+        else:
+            outcome = {"status": "rejected", "message": "Användaren avvisade åtgärden."}
+            status = "rejected"
+        tool_impl.log_tool_call(
+            settings.resolved_logs_dir(),
+            tool_name=call.name,
+            target=target,
+            risk_level=record["risk_level"],
+            status=status,
+            detail=str(outcome),
+        )
+        store.resolve_tool_call(tool_call_id, status=status, result=outcome)
+
+        history = [StoredMessage.model_validate(item) for item in store.messages(conversation_id)]
+        context_messages = [ChatMessage(role=item.role, content=item.content or "[Skärmdump]") for item in history]
+        context = context_builder.build(context_messages, record["profile"], record["working_directory"])
+        model_history = [ChatMessage.model_validate(item) for item in store.model_messages(conversation_id)]
+        provider: ModelProvider = openai if record["provider"] == "openai" else ollama
+
+        turn = await agent.resume_after_decision(
+            provider,
+            record["model"],
+            [context.system_message, runtime_message(provider, record["model"]), *model_history],
+            call=call,
+            result_payload=outcome,
+            workspace=workspace,
+            logs_dir=settings.resolved_logs_dir(),
+        )
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (StorageError, ContextError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if turn.pending_tool_call is not None:
+        new_call = turn.pending_tool_call
+        risk = tool_impl.RISK_BY_TOOL.get(new_call.name, "medium")
+        new_record = store.create_pending_tool_call(
+            conversation_id,
+            new_call.id,
+            new_call.name,
+            new_call.arguments,
+            risk,
+            record["provider"],
+            turn.resolved_model,
+            record["profile"],
+            record["working_directory"],
+        )
+        conversation, assistant_message = store.append_assistant_message(
+            conversation_id,
+            _tool_proposal_text(new_call),
+            tool_call_id=new_call.id,
+        )
+        return ToolCallDecisionResponse(
+            conversation=conversation,
+            assistant_message=assistant_message,
+            pending_tool_call=PendingToolCall(
+                id=new_record["id"],
+                tool_name=new_record["tool_name"],
+                arguments=new_record["arguments"],
+                risk_level=new_record["risk_level"],
+                status=new_record["status"],
+                created_at=new_record["created_at"],
+            ),
+        )
+
+    conversation, assistant_message = store.append_assistant_message(conversation_id, turn.message.content)
+    return ToolCallDecisionResponse(conversation=conversation, assistant_message=assistant_message)
 
 
 @app.get("/api/attachments/{filename}", response_class=FileResponse)

@@ -4,12 +4,17 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class ChatMessage(BaseModel):
-    role: Literal["system", "user", "assistant"]
+    role: Literal["system", "user", "assistant", "tool"]
     content: str = ""
     images: list[str] = Field(default_factory=list, exclude=True)
+    tool_call_id: str | None = None
+    tool_name: str | None = None
+    tool_arguments: dict | None = None
 
     @model_validator(mode="after")
     def require_content_or_image(self) -> "ChatMessage":
+        if self.tool_call_id:
+            return self
         if not self.content.strip() and not self.images:
             raise ValueError("Ett meddelande måste innehålla text eller en bild.")
         return self
@@ -75,6 +80,15 @@ class ConversationSummary(BaseModel):
     updated_at: str
 
 
+class PendingToolCall(BaseModel):
+    id: str
+    tool_name: str
+    arguments: dict
+    risk_level: Literal["low", "medium"]
+    status: Literal["pending", "approved", "rejected", "executed", "failed"]
+    created_at: str
+
+
 class StoredMessage(BaseModel):
     id: str
     role: Literal["user", "assistant"]
@@ -82,6 +96,7 @@ class StoredMessage(BaseModel):
     image_url: str | None
     ocr_text: str | None
     created_at: str
+    tool_call: PendingToolCall | None = None
 
 
 class ConversationDetail(ConversationSummary):
@@ -118,6 +133,13 @@ class ConversationChatResponse(BaseModel):
     context_files: list[str]
     ocr_text: str | None
     usage: UsageInfo | None = None
+    pending_tool_call: PendingToolCall | None = None
+
+
+class ToolCallDecisionResponse(BaseModel):
+    conversation: ConversationSummary
+    assistant_message: StoredMessage
+    pending_tool_call: PendingToolCall | None = None
 
 
 class ResearchReport(BaseModel):

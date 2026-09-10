@@ -1,9 +1,10 @@
 import base64
 import binascii
+import json
 
 import httpx
 
-from samida.providers.base import ModelProvider, ProviderError
+from samida.providers.base import ChatTurnResult, ModelProvider, ProviderError, ToolCallRequest
 from samida.schemas import ChatMessage, UsageInfo
 
 _IMAGE_SIGNATURES: list[tuple[bytes, str]] = [
@@ -25,6 +26,18 @@ def _as_data_uri(raw_base64: str) -> str:
     raise ProviderError("Bildformatet kunde inte identifieras (stöder PNG/JPEG/WebP).")
 
 
+def _format_tools(specs: list[dict]) -> list[dict]:
+    return [
+        {
+            "type": "function",
+            "name": spec["name"],
+            "description": spec["description"],
+            "parameters": spec["parameters"],
+        }
+        for spec in specs
+    ]
+
+
 class OpenAIProvider(ModelProvider):
     name = "openai"
 
@@ -42,7 +55,8 @@ class OpenAIProvider(ModelProvider):
         self,
         messages: list[ChatMessage],
         model: str | None = None,
-    ) -> tuple[str, ChatMessage]:
+        tools: list[dict] | None = None,
+    ) -> ChatTurnResult:
         if not self.api_key:
             raise ProviderError("OpenAI är inte konfigurerat ännu.")
 
@@ -52,6 +66,8 @@ class OpenAIProvider(ModelProvider):
             "input": [self._message_payload(message) for message in messages],
             "store": False,
         }
+        if tools:
+            payload["tools"] = _format_tools(tools)
         headers = {"Authorization": f"Bearer {self.api_key}"}
 
         try:
@@ -80,22 +96,54 @@ class OpenAIProvider(ModelProvider):
             and all(key in raw_usage for key in ("input_tokens", "output_tokens", "total_tokens"))
             else None
         )
+
+        output = data.get("output", [])
+        function_call = next((item for item in output if item.get("type") == "function_call"), None)
+        if function_call is not None:
+            try:
+                arguments = json.loads(function_call.get("arguments") or "{}")
+            except json.JSONDecodeError as exc:
+                raise ProviderError("OpenAI returnerade ogiltiga verktygsargument.") from exc
+            tool_call = ToolCallRequest(
+                id=function_call["call_id"],
+                name=function_call["name"],
+                arguments=arguments,
+            )
+            return ChatTurnResult(resolved_model=resolved_model, tool_call=tool_call)
+
         content = data.get("output_text")
         if not isinstance(content, str):
             content = "".join(
                 item.get("text", "")
-                for output in data.get("output", [])
-                for item in output.get("content", [])
+                for output_item in output
+                for item in output_item.get("content", [])
                 if item.get("type") == "output_text"
             )
         if not content.strip():
             raise ProviderError("OpenAI returnerade inget textsvar.")
 
-        return resolved_model, ChatMessage(role="assistant", content=content)
+        return ChatTurnResult(
+            resolved_model=resolved_model,
+            message=ChatMessage(role="assistant", content=content),
+        )
 
     @staticmethod
     def _message_payload(message: ChatMessage) -> dict:
-        content: list[dict] = [{"type": "input_text", "text": message.content}]
+        if message.role == "assistant" and message.tool_call_id:
+            return {
+                "type": "function_call",
+                "call_id": message.tool_call_id,
+                "name": message.tool_name,
+                "arguments": json.dumps(message.tool_arguments or {}),
+            }
+        if message.role == "tool":
+            return {
+                "type": "function_call_output",
+                "call_id": message.tool_call_id,
+                "output": message.content,
+            }
+        text_type = "output_text" if message.role == "assistant" else "input_text"
+        content: list[dict] = [{"type": text_type, "text": message.content}]
         content.extend(
             {"type": "input_image", "image_url": _as_data_uri(image)}
             for image in message.images

@@ -1,7 +1,41 @@
+from uuid import uuid4
+
 import httpx
 
-from samida.providers.base import ModelProvider, ProviderError
+from samida.providers.base import ChatTurnResult, ModelProvider, ProviderError, ToolCallRequest
 from samida.schemas import ChatMessage
+
+
+def _format_tools(specs: list[dict]) -> list[dict]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": spec["name"],
+                "description": spec["description"],
+                "parameters": spec["parameters"],
+            },
+        }
+        for spec in specs
+    ]
+
+
+def _message_payload(message: ChatMessage) -> dict:
+    if message.role == "assistant" and message.tool_call_id:
+        return {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"function": {"name": message.tool_name, "arguments": message.tool_arguments or {}}}
+            ],
+        }
+    if message.role == "tool":
+        return {"role": "tool", "content": message.content}
+    return {
+        "role": message.role,
+        "content": message.content,
+        **({"images": message.images} if message.images else {}),
+    }
 
 
 class OllamaProvider(ModelProvider):
@@ -27,21 +61,17 @@ class OllamaProvider(ModelProvider):
         self,
         messages: list[ChatMessage],
         model: str | None = None,
-    ) -> tuple[str, ChatMessage]:
+        tools: list[dict] | None = None,
+    ) -> ChatTurnResult:
         resolved_model = model or self.default_model
         payload = {
             "model": resolved_model,
-            "messages": [
-                {
-                    "role": message.role,
-                    "content": message.content,
-                    **({"images": message.images} if message.images else {}),
-                }
-                for message in messages
-            ],
+            "messages": [_message_payload(message) for message in messages],
             "stream": False,
             "think": False,
         }
+        if tools:
+            payload["tools"] = _format_tools(tools)
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -56,8 +86,22 @@ class OllamaProvider(ModelProvider):
         except httpx.HTTPError as exc:
             raise ProviderError("Ollama kunde inte nås.") from exc
 
-        content = response.json().get("message", {}).get("content")
+        message = response.json().get("message", {})
+        tool_calls = message.get("tool_calls")
+        if tool_calls:
+            call = tool_calls[0]["function"]
+            tool_call = ToolCallRequest(
+                id=str(uuid4()),
+                name=call["name"],
+                arguments=call.get("arguments") or {},
+            )
+            return ChatTurnResult(resolved_model=resolved_model, tool_call=tool_call)
+
+        content = message.get("content")
         if not isinstance(content, str) or not content.strip():
             raise ProviderError("Ollama returnerade inget textsvar.")
 
-        return resolved_model, ChatMessage(role="assistant", content=content)
+        return ChatTurnResult(
+            resolved_model=resolved_model,
+            message=ChatMessage(role="assistant", content=content),
+        )
