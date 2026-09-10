@@ -4,7 +4,7 @@ from samida.config import get_settings
 from samida.context import ContextBuilder
 from samida.camofox import CamoFoxClient
 from samida.ocr import OcrService
-from samida.providers import OllamaProvider, OpenAIProvider
+from samida.providers import AnthropicProvider, OllamaProvider, OpenAIProvider
 from samida.storage import ConversationStore
 
 
@@ -25,6 +25,17 @@ def get_openai_provider() -> OpenAIProvider:
         api_key=settings.openai_api_key,
         base_url=settings.openai_base_url,
         default_model=settings.openai_model,
+        timeout=settings.request_timeout_seconds,
+    )
+
+
+@lru_cache
+def get_anthropic_provider() -> AnthropicProvider:
+    settings = get_settings()
+    return AnthropicProvider(
+        api_key=settings.anthropic_api_key,
+        base_url=settings.anthropic_base_url,
+        default_model=settings.anthropic_model,
         timeout=settings.request_timeout_seconds,
     )
 

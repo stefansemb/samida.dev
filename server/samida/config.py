@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     )
     openai_model: str = "gpt-5.6-luna"
     openai_base_url: str = "https://api.openai.com/v1"
+    anthropic_api_key: str | None = Field(
+        default=None,
+        validation_alias="ANTHROPIC_API_KEY",
+    )
+    anthropic_model: str = "claude-opus-5"
+    anthropic_base_url: str = "https://api.anthropic.com/v1"
     request_timeout_seconds: float = Field(default=120.0, gt=0)
     camofox_enabled: bool = True
     camofox_base_url: str = "http://127.0.0.1:9377"

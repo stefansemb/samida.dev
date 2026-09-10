@@ -12,13 +12,14 @@ from samida import agent, tools as tool_impl
 from samida.config import Settings, get_settings
 from samida.context import ContextBuilder, ContextError
 from samida.dependencies import (
+    get_anthropic_provider,
     get_context_builder,
     get_conversation_store,
     get_ocr_service,
     get_openai_provider,
     get_ollama_provider,
 )
-from samida.providers import ModelProvider, OllamaProvider, OpenAIProvider, ProviderError, ToolCallRequest
+from samida.providers import AnthropicProvider, ModelProvider, OllamaProvider, OpenAIProvider, ProviderError, ToolCallRequest
 from samida.ocr import OcrService
 from samida.research import run_research
 from samida.camofox import CamoFoxClient
@@ -78,6 +79,19 @@ def pick_workspace() -> WorkspacePickResponse:
     return WorkspacePickResponse(path=path)
 
 
+def pick_provider(
+    name: str,
+    ollama: OllamaProvider,
+    openai: OpenAIProvider,
+    anthropic: AnthropicProvider,
+) -> ModelProvider:
+    if name == "openai":
+        return openai
+    if name == "anthropic":
+        return anthropic
+    return ollama
+
+
 def runtime_message(provider: ModelProvider, model: str) -> ChatMessage:
     return ChatMessage(
         role="system",
@@ -107,6 +121,7 @@ async def health(
             vision_model_available=False,
             available_models=[],
             openai_configured=settings.openai_api_key is not None,
+            anthropic_configured=settings.anthropic_api_key is not None,
         )
 
     available = settings.ollama_chat_model in models
@@ -120,6 +135,7 @@ async def health(
         vision_model_available=vision_available,
         available_models=models,
         openai_configured=settings.openai_api_key is not None,
+        anthropic_configured=settings.anthropic_api_key is not None,
     )
 
 
@@ -129,11 +145,12 @@ async def chat(
     settings: Settings = Depends(get_settings),
     ollama: OllamaProvider = Depends(get_ollama_provider),
     openai: OpenAIProvider = Depends(get_openai_provider),
+    anthropic: AnthropicProvider = Depends(get_anthropic_provider),
     context_builder: ContextBuilder = Depends(get_context_builder),
 ) -> ChatResponse:
     try:
         context = context_builder.build(request.messages, request.profile, request.working_directory)
-        provider: ModelProvider = openai if request.provider == "openai" else ollama
+        provider: ModelProvider = pick_provider(request.provider, ollama, openai, anthropic)
         selected_model = request.model
         if selected_model is None and any(message.images for message in request.messages):
             selected_model = settings.ollama_vision_model
@@ -281,6 +298,7 @@ async def conversation_chat(
     request: ConversationChatRequest,
     ollama: OllamaProvider = Depends(get_ollama_provider),
     openai: OpenAIProvider = Depends(get_openai_provider),
+    anthropic: AnthropicProvider = Depends(get_anthropic_provider),
     context_builder: ContextBuilder = Depends(get_context_builder),
     store: ConversationStore = Depends(get_conversation_store),
     ocr: OcrService = Depends(get_ocr_service),
@@ -325,7 +343,7 @@ async def conversation_chat(
             ChatMessage.model_validate(message)
             for message in store.model_messages(conversation_id)
         ]
-        provider: ModelProvider = openai if request.provider == "openai" else ollama
+        provider: ModelProvider = pick_provider(request.provider, ollama, openai, anthropic)
         selected_model = request.model
         if image_base64 and request.provider == "ollama":
             selected_model = settings.ollama_vision_model
@@ -434,6 +452,7 @@ async def approve_tool_call(
     tool_call_id: str,
     ollama: OllamaProvider = Depends(get_ollama_provider),
     openai: OpenAIProvider = Depends(get_openai_provider),
+    anthropic: AnthropicProvider = Depends(get_anthropic_provider),
     context_builder: ContextBuilder = Depends(get_context_builder),
     store: ConversationStore = Depends(get_conversation_store),
     settings: Settings = Depends(get_settings),
@@ -444,6 +463,7 @@ async def approve_tool_call(
         approve=True,
         ollama=ollama,
         openai=openai,
+        anthropic=anthropic,
         context_builder=context_builder,
         store=store,
         settings=settings,
@@ -459,6 +479,7 @@ async def reject_tool_call(
     tool_call_id: str,
     ollama: OllamaProvider = Depends(get_ollama_provider),
     openai: OpenAIProvider = Depends(get_openai_provider),
+    anthropic: AnthropicProvider = Depends(get_anthropic_provider),
     context_builder: ContextBuilder = Depends(get_context_builder),
     store: ConversationStore = Depends(get_conversation_store),
     settings: Settings = Depends(get_settings),
@@ -469,6 +490,7 @@ async def reject_tool_call(
         approve=False,
         ollama=ollama,
         openai=openai,
+        anthropic=anthropic,
         context_builder=context_builder,
         store=store,
         settings=settings,
@@ -482,6 +504,7 @@ async def _resolve_tool_call(
     approve: bool,
     ollama: OllamaProvider,
     openai: OpenAIProvider,
+    anthropic: AnthropicProvider,
     context_builder: ContextBuilder,
     store: ConversationStore,
     settings: Settings,
@@ -521,7 +544,7 @@ async def _resolve_tool_call(
         context_messages = [ChatMessage(role=item.role, content=item.content or "[Skärmdump]") for item in history]
         context = context_builder.build(context_messages, record["profile"], record["working_directory"])
         model_history = [ChatMessage.model_validate(item) for item in store.model_messages(conversation_id)]
-        provider: ModelProvider = openai if record["provider"] == "openai" else ollama
+        provider: ModelProvider = pick_provider(record["provider"], ollama, openai, anthropic)
 
         turn = await agent.resume_after_decision(
             provider,

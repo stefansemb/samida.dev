@@ -73,6 +73,7 @@ type Health = {
   vision_model_available: boolean;
   available_models: string[];
   openai_configured: boolean;
+  anthropic_configured: boolean;
 };
 type PendingImage = {
   filename: string;
@@ -188,6 +189,23 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 function argText(value: unknown): string {
   return typeof value === 'string' ? value : value == null ? '' : JSON.stringify(value);
+}
+
+function resolveProviderModel(selectedModel: string): { provider: 'ollama' | 'openai' | 'anthropic'; model: string } {
+  for (const provider of ['openai', 'anthropic'] as const) {
+    const prefix = `${provider}:`;
+    if (selectedModel.startsWith(prefix)) {
+      return { provider, model: selectedModel.slice(prefix.length) };
+    }
+  }
+  return { provider: 'ollama', model: selectedModel };
+}
+
+function modelLabel(model: string): string {
+  const { provider, model: name } = resolveProviderModel(model);
+  if (provider === 'openai') return `OpenAI · ${name}`;
+  if (provider === 'anthropic') return `Claude · ${name}`;
+  return model;
 }
 
 function fileToImage(file: File): Promise<PendingImage> {
@@ -531,6 +549,7 @@ export default function Home() {
           localUserMessage,
         ]);
 
+        const { provider: chatProvider, model: chatModel } = resolveProviderModel(selectedModel);
         const result = await requestJson<ChatResult>(
           `/api/conversations/${conversation.id}/chat`,
           {
@@ -538,10 +557,8 @@ export default function Home() {
             headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 content: normalized,
-                provider: selectedModel.startsWith('openai:') ? 'openai' : 'ollama',
-                model: selectedModel.startsWith('openai:')
-                  ? selectedModel.slice('openai:'.length)
-                  : selectedModel,
+                provider: chatProvider,
+                model: chatModel,
                 profile: selectedProfile,
                 working_directory: workingDirectory.trim() || null,
                 image: image
@@ -666,7 +683,7 @@ export default function Home() {
   const chatMessageCount = messages.length === 1 && messages[0] === greeting
     ? 0
     : messages.length;
-  const usageStatus = lastUsedProvider === 'openai'
+  const usageStatus = lastUsedProvider === 'openai' || lastUsedProvider === 'anthropic'
     ? 'Se API-dashboard'
     : 'Ingen molnlimit';
   const availableModels = Array.from(
@@ -681,6 +698,13 @@ export default function Home() {
       'openai:gpt-5.6-luna',
       'openai:gpt-5.6-terra',
       'openai:gpt-5.6-sol',
+    );
+  }
+  if (health?.anthropic_configured) {
+    availableModels.push(
+      'anthropic:claude-opus-5',
+      'anthropic:claude-sonnet-5',
+      'anthropic:claude-haiku-4-5',
     );
   }
   const selectableModels = availableModels.filter((model) => {
@@ -776,9 +800,7 @@ export default function Home() {
               >
                 {selectableModels.map((model) => (
                   <option key={model} value={model}>
-                    {model.startsWith('openai:')
-                      ? `OpenAI · ${model.slice('openai:'.length)}`
-                      : model}
+                    {modelLabel(model)}
                   </option>
                 ))}
               </select>

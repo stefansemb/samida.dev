@@ -16,7 +16,7 @@ class FakeOllamaProvider:
 @pytest.mark.asyncio
 async def test_health_reports_configured_model() -> None:
     app.dependency_overrides[get_ollama_provider] = lambda: FakeOllamaProvider()
-    app.dependency_overrides[get_settings] = lambda: Settings(openai_api_key=None)
+    app.dependency_overrides[get_settings] = lambda: Settings(openai_api_key=None, anthropic_api_key=None)
     try:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(
@@ -37,4 +37,5 @@ async def test_health_reports_configured_model() -> None:
         "vision_model_available": True,
         "available_models": ["gemma4:e4b", "qwen3-vl:8b"],
         "openai_configured": False,
+        "anthropic_configured": False,
     }

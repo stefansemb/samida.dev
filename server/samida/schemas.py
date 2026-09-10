@@ -22,7 +22,7 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(min_length=1)
-    provider: Literal["ollama", "openai"] = "ollama"
+    provider: Literal["ollama", "openai", "anthropic"] = "ollama"
     model: str | None = None
     profile: Literal["minimal", "samida-standard", "coding", "jarvis", "unreal"] = "minimal"
     working_directory: str | None = None
@@ -63,6 +63,7 @@ class HealthResponse(BaseModel):
     vision_model_available: bool
     available_models: list[str] = Field(default_factory=list)
     openai_configured: bool = False
+    anthropic_configured: bool = False
 
 
 class ConversationCreate(BaseModel):
@@ -112,7 +113,7 @@ class ImageAttachment(BaseModel):
 class ConversationChatRequest(BaseModel):
     content: str = Field(default="", max_length=50_000)
     image: ImageAttachment | None = None
-    provider: Literal["ollama", "openai"] = "ollama"
+    provider: Literal["ollama", "openai", "anthropic"] = "ollama"
     model: str | None = None
     profile: Literal["minimal", "samida-standard", "coding", "jarvis", "unreal"] = "minimal"
     working_directory: str | None = None
