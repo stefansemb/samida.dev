@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AppLockerPolicy Version="1">
+  <RuleCollection Type="Script" EnforcementMode="Enabled">
+    <FilePathRule
+      Id="cc5c8320-34cf-43c8-a798-2bc6e15f8287"
+      Name="SAMIDA development scripts"
+      Description="Allows development scripts only inside C:\AiProjects\SAMIDA."
+      UserOrGroupSid="S-1-1-0"
+      Action="Allow">
+      <Conditions>
+        <FilePathCondition Path="C:\AiProjects\SAMIDA\*" />
+      </Conditions>
+    </FilePathRule>
+  </RuleCollection>
+</AppLockerPolicy>

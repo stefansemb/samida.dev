@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+node_modules/
+.npm-cache/
+.venv/
+__pycache__/
+dist/
+build/
+logs/*
+!logs/.gitkeep
+data/*
+!data/.gitkeep
+conversations/*
+!conversations/.gitkeep

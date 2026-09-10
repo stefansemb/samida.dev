@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "samida"
+version = "0.1.0"
+description = "Local-first hybrid personal assistant"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "httpx>=0.28,<1",
+  "pydantic-settings>=2.7,<3",
+  "rapidocr>=3.9,<4",
+  "onnxruntime>=1.29,<2",
+  "uvicorn[standard]>=0.34,<1",
+  "winotify>=1.1,<2; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<9",
+  "pytest-asyncio>=0.25,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["server/samida"]
+
+[tool.pytest.ini_options]
+testpaths = ["server/tests"]
+asyncio_mode = "auto"
