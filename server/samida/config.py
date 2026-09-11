@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     )
     anthropic_model: str = "claude-opus-5"
     anthropic_base_url: str = "https://api.anthropic.com/v1"
+    cors_extra_origins: str = ""
     request_timeout_seconds: float = Field(default=120.0, gt=0)
     camofox_enabled: bool = True
     camofox_base_url: str = "http://127.0.0.1:9377"
@@ -46,6 +47,9 @@ class Settings(BaseSettings):
 
     def resolved_logs_dir(self) -> Path:
         return self.logs_dir or self.project_root / "logs"
+
+    def resolved_cors_origins(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_extra_origins.split(",") if origin.strip()]
 
 
 @lru_cache

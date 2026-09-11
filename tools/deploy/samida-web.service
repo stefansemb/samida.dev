@@ -1,0 +1,13 @@
+[Unit]
+Description=SAMIDA web (vinext dev server)
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/services/samida/web
+Environment=NEXT_PUBLIC_SAMIDA_API_URL=
+ExecStart=/usr/bin/npm run dev -- --port 3100
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

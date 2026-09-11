@@ -5,6 +5,11 @@ import httpx
 from samida.providers.base import ChatTurnResult, ModelProvider, ProviderError, ToolCallRequest
 from samida.schemas import ChatMessage
 
+# model_names() is a quick reachability probe (used by /api/health), not a chat call —
+# it must fail fast rather than hang for the full chat timeout when Ollama is unreachable
+# (e.g. an offline Tailscale peer, where the TCP handshake never gets a response).
+HEALTH_CHECK_TIMEOUT = 5.0
+
 
 def _format_tools(specs: list[dict]) -> list[dict]:
     return [
@@ -48,7 +53,7 @@ class OllamaProvider(ModelProvider):
 
     async def model_names(self) -> list[str]:
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=HEALTH_CHECK_TIMEOUT) as client:
                 response = await client.get(f"{self.base_url}/api/tags")
                 response.raise_for_status()
         except httpx.HTTPError as exc:
@@ -74,7 +79,8 @@ class OllamaProvider(ModelProvider):
             payload["tools"] = _format_tools(tools)
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            timeout = httpx.Timeout(self.timeout, connect=HEALTH_CHECK_TIMEOUT)
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(
                     f"{self.base_url}/api/chat",
                     json=payload,

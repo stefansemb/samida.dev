@@ -1,6 +1,4 @@
 import asyncio
-import tkinter as tk
-from tkinter import filedialog
 from pathlib import Path
 from typing import Literal
 
@@ -60,6 +58,7 @@ app.add_middleware(
         "http://localhost:3000",
         "http://127.0.0.1:5173",
         "http://localhost:5173",
+        *get_settings().resolved_cors_origins(),
     ],
     allow_credentials=False,
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
@@ -68,7 +67,15 @@ app.add_middleware(
 
 @app.post("/api/workspace/pick", response_model=WorkspacePickResponse)
 def pick_workspace() -> WorkspacePickResponse:
-    """Open a local native folder picker for the desktop SAMIDA instance."""
+    """Open a local native folder picker. Desktop-only; unavailable on a headless server."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=501,
+            detail="Mappväljaren är bara tillgänglig på en desktop-installation av SAMIDA.",
+        ) from exc
     root = tk.Tk()
     root.withdraw()
     root.attributes("-topmost", True)

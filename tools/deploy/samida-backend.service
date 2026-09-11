@@ -1,0 +1,13 @@
+[Unit]
+Description=SAMIDA backend (FastAPI/uvicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=%h/services/samida
+ExecStart=%h/services/samida/.venv/bin/python -m uvicorn server.samida.main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

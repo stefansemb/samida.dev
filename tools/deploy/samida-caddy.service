@@ -1,0 +1,14 @@
+[Unit]
+Description=SAMIDA Caddy (TLS reverse proxy for app.samida.dev)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=%h/services/samida
+EnvironmentFile=%h/services/samida/secrets/cloudflare.env
+ExecStart=%h/services/samida/bin/caddy run --config %h/services/samida/Caddyfile --adapter caddyfile
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

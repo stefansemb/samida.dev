@@ -1,0 +1,20 @@
+{
+    email stese2026@gmail.com
+    auto_https disable_redirects
+}
+
+app.samida.dev:8443 {
+    tls {
+        dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+    }
+
+    handle /api/* {
+        reverse_proxy 127.0.0.1:8000
+    }
+
+    handle {
+        reverse_proxy 127.0.0.1:3100 {
+            header_up Host localhost:3100
+        }
+    }
+}
