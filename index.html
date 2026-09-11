@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SAMIDA</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+
+  /* ============ TOKENS — dark-first (matches the SAMIDA product) ============ */
+  :root {
+    --bg: #171717;
+    --surface: #1c1b1a;
+    --surface-2: #232220;
+    --border: #34322e;
+    --border-soft: #262523;
+    --ink: #ede9e3;
+    --ink-dim: #a9a297;
+    --ink-faint: #726b5f;
+    --accent: #eb7136;
+    --accent-ink: #1a1410;
+    --accent-soft: rgba(235, 113, 54, 0.14);
+    --good: #4ade80;
+
+    --font-display: "Bricolage Grotesque", "Hanken Grotesk", system-ui, sans-serif;
+    --font-body: "IBM Plex Sans", -apple-system, "Segoe UI", sans-serif;
+    --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #faf6f1;
+      --surface: #ffffff;
+      --surface-2: #f4eee5;
+      --border: #e6dccc;
+      --border-soft: #ede5d8;
+      --ink: #241f18;
+      --ink-dim: #6c6153;
+      --ink-faint: #948972;
+      --accent: #c85a1c;
+      --accent-ink: #fffaf5;
+      --accent-soft: rgba(200, 90, 28, 0.1);
+      --good: #16824a;
+    }
+  }
+
+  :root[data-theme="light"] {
+    --bg: #faf6f1;
+    --surface: #ffffff;
+    --surface-2: #f4eee5;
+    --border: #e6dccc;
+    --border-soft: #ede5d8;
+    --ink: #241f18;
+    --ink-dim: #6c6153;
+    --ink-faint: #948972;
+    --accent: #c85a1c;
+    --accent-ink: #fffaf5;
+    --accent-soft: rgba(200, 90, 28, 0.1);
+    --good: #16824a;
+  }
+
+  /* ============ BASE ============ */
+  * { box-sizing: border-box; }
+  html { color-scheme: dark light; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3 {
+    font-family: var(--font-display);
+    font-weight: 700;
+    line-height: 1.08;
+    text-wrap: balance;
+    margin: 0;
+    color: var(--ink);
+  }
+
+  p { margin: 0; }
+  a { color: inherit; }
+
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 500;
+  }
+
+  .wrap {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding-inline: clamp(20px, 5vw, 56px);
+  }
+
+  ::selection { background: var(--accent-soft); color: var(--ink); }
+
+  /* ============ NAV ============ */
+  header.site {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: color-mix(in srgb, var(--bg) 86%, transparent);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border-soft);
+  }
+
+  .nav-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-block: 16px;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 17px;
+    letter-spacing: 0.01em;
+  }
+
+  .brand .mark {
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
+    background: linear-gradient(155deg, var(--accent), #a8461a);
+    flex-shrink: 0;
+  }
+
+  nav.links {
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    font-size: 14.5px;
+    font-weight: 500;
+  }
+
+  nav.links a { text-decoration: none; color: var(--ink-dim); transition: color .15s ease; }
+  nav.links a:hover, nav.links a:focus-visible { color: var(--ink); }
+  nav.links a:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 3px; }
+
+  .pill-soon {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    color: var(--ink-faint);
+    border: 1px solid var(--border);
+    border-radius: 99px;
+    padding: 2px 8px;
+    margin-left: 6px;
+  }
+
+  /* ============ HERO ============ */
+  .hero {
+    padding-block: clamp(56px, 9vw, 96px) clamp(64px, 8vw, 88px);
+  }
+
+  .hero-grid {
+    display: grid;
+    grid-template-columns: 1.25fr 0.85fr;
+    gap: clamp(32px, 5vw, 64px);
+    align-items: start;
+  }
+
+  .hero-eyebrow { margin-bottom: 18px; }
+
+  .hero h1 {
+    font-size: clamp(38px, 5.4vw, 60px);
+    letter-spacing: -0.01em;
+  }
+
+  .hero h1 em {
+    font-style: normal;
+    color: var(--accent);
+  }
+
+  .hero .lede {
+    margin-top: 22px;
+    max-width: 46ch;
+    font-size: 17.5px;
+    color: var(--ink-dim);
+    line-height: 1.65;
+  }
+
+  .hero-actions {
+    display: flex;
+    gap: 12px;
+    margin-top: 32px;
+    flex-wrap: wrap;
+  }
+
+  .btn {
+    font-family: var(--font-body);
+    font-size: 14.5px;
+    font-weight: 600;
+    padding: 11px 20px;
+    border-radius: 9px;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    transition: transform .15s ease, background .15s ease, border-color .15s ease;
+  }
+
+  .btn:hover { transform: translateY(-1px); }
+
+  .btn-primary { background: var(--accent); color: var(--accent-ink); }
+  .btn-primary:hover { background: color-mix(in srgb, var(--accent) 88%, white 12%); }
+
+  .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--ink); }
+  .btn-ghost:hover { border-color: var(--accent); }
+
+  /* ---- status readout card (echoes the product's own UI language) ---- */
+  .readout {
+    background: var(--surface);
+    border: 1px solid var(--border-soft);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+
+  .readout-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 13px 16px;
+    border-bottom: 1px solid var(--border-soft);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+
+  .readout-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--good);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 18%, transparent);
+  }
+
+  .readout-body {
+    padding: 16px;
+    display: grid;
+    gap: 13px;
+  }
+
+  .readout-row {
+    display: grid;
+    grid-template-columns: 84px 1fr;
+    gap: 12px;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    align-items: baseline;
+  }
+
+  .readout-row .k { color: var(--ink-faint); }
+  .readout-row .v { color: var(--ink); }
+  .readout-row .v .sep { color: var(--ink-faint); padding-inline: 2px; }
+
+  /* ============ SECTIONS ============ */
+  section { padding-block: clamp(48px, 7vw, 76px); }
+  section + section { border-top: 1px solid var(--border-soft); }
+
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 24px;
+    margin-bottom: clamp(28px, 4vw, 40px);
+    flex-wrap: wrap;
+  }
+
+  .section-head h2 { font-size: clamp(26px, 3.4vw, 34px); }
+
+  .section-head .count {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--ink-faint);
+  }
+
+  /* ============ PROJECTS ============ */
+  .projects {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 18px;
+  }
+
+  .project-card {
+    background: var(--surface);
+    border: 1px solid var(--border-soft);
+    border-radius: 16px;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    transition: border-color .15s ease, transform .15s ease;
+  }
+
+  .project-card:hover { border-color: var(--border); transform: translateY(-2px); }
+
+  .project-card.anchor {
+    grid-column: span 2;
+    background: linear-gradient(155deg, var(--surface) 60%, color-mix(in srgb, var(--accent) 6%, var(--surface)));
+  }
+
+  .project-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .project-card h3 {
+    font-size: 21px;
+  }
+
+  .status-chip {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 3px 9px;
+    border-radius: 99px;
+    white-space: nowrap;
+    border: 1px solid transparent;
+  }
+
+  .status-chip.active { color: var(--good); background: color-mix(in srgb, var(--good) 14%, transparent); }
+  .status-chip.dev { color: var(--accent); background: var(--accent-soft); }
+  .status-chip.live { color: var(--ink-dim); background: var(--surface-2); border-color: var(--border-soft); }
+
+  .project-card p.desc {
+    color: var(--ink-dim);
+    font-size: 14.5px;
+    line-height: 1.62;
+  }
+
+  .project-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    margin-top: auto;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+  }
+
+  .project-tags span {
+    color: var(--ink-faint);
+    border: 1px solid var(--border-soft);
+    border-radius: 6px;
+    padding: 3px 8px;
+  }
+
+  /* ============ ABOUT ============ */
+  .about-grid {
+    display: grid;
+    grid-template-columns: 1.15fr 0.85fr;
+    gap: clamp(32px, 5vw, 56px);
+  }
+
+  .about-body p {
+    font-size: 17px;
+    color: var(--ink-dim);
+    line-height: 1.7;
+    max-width: 56ch;
+  }
+
+  .about-body p + p { margin-top: 16px; }
+
+  .about-body strong { color: var(--ink); font-weight: 600; }
+
+  .now-card {
+    background: var(--surface);
+    border: 1px solid var(--border-soft);
+    border-radius: 14px;
+    padding: 20px;
+    align-self: start;
+  }
+
+  .now-card .eyebrow { display: block; margin-bottom: 14px; }
+
+  .now-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 12px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--ink-dim);
+    line-height: 1.55;
+  }
+
+  .now-list li { display: flex; gap: 10px; }
+  .now-list li::before { content: "—"; color: var(--ink-faint); flex-shrink: 0; }
+
+  /* ============ FOOTER ============ */
+  footer.site {
+    padding-block: 32px 40px;
+    border-top: 1px solid var(--border-soft);
+  }
+
+  .footer-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
+
+  .footer-row .brand { font-size: 14.5px; }
+  .footer-row .brand .mark { width: 20px; height: 20px; border-radius: 5px; }
+
+  .foot-meta {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    color: var(--ink-faint);
+    display: flex;
+    gap: 20px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  /* ============ RESPONSIVE ============ */
+  @media (max-width: 860px) {
+    .hero-grid { grid-template-columns: 1fr; }
+    .projects { grid-template-columns: 1fr; }
+    .project-card.anchor { grid-column: span 1; }
+    .about-grid { grid-template-columns: 1fr; }
+    nav.links { gap: 18px; font-size: 13.5px; }
+  }
+
+  @media (max-width: 560px) {
+    nav.links { display: none; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+
+</style>
+</head>
+<body>
+
+  <header class="site">
+    <div class="wrap nav-row">
+      <div class="brand"><span class="mark" aria-hidden="true"></span>SAMIDA</div>
+      <nav class="links" aria-label="Primary">
+        <a href="#projects">Projects</a>
+        <a href="#about">About</a>
+        <a href="#resources" aria-disabled="true">Resources<span class="pill-soon">Soon</span></a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="wrap hero-grid">
+        <div>
+          <div class="eyebrow hero-eyebrow">Stefan Semb — building local-first</div>
+          <h1>SAMIDA is the name<br>for how I build<em>.</em></h1>
+          <p class="lede">A local-first AI assistant is the flagship — but the same instinct runs through everything below it: keep it private, keep it self-hosted, keep it running on hardware I actually control.</p>
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="#projects">See the projects</a>
+            <a class="btn btn-ghost" href="#about">About me</a>
+          </div>
+        </div>
+
+        <div class="readout" aria-hidden="true">
+          <div class="readout-head"><span class="readout-dot"></span>samida — status</div>
+          <div class="readout-body">
+            <div class="readout-row"><span class="k">providers</span><span class="v">ollama<span class="sep">·</span>claude<span class="sep">·</span>gpt</span></div>
+            <div class="readout-row"><span class="k">tools</span><span class="v">read, write<span class="sep">·</span>confirm required</span></div>
+            <div class="readout-row"><span class="k">network</span><span class="v">tailscale-only</span></div>
+            <div class="readout-row"><span class="k">uptime</span><span class="v">systemd --user<span class="sep">·</span>auto-restart</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="projects">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>What I'm building</h2>
+          <span class="count">03 active</span>
+        </div>
+
+        <div class="projects">
+          <article class="project-card anchor">
+            <div class="project-top">
+              <h3>SAMIDA</h3>
+              <span class="status-chip active">Active</span>
+            </div>
+            <p class="desc">A local-first AI assistant that runs Ollama, GPT, and Claude side by side in one interface — with real file tools it can only use after I've approved the exact change.</p>
+            <div class="project-tags">
+              <span>FastAPI</span><span>Vite</span><span>Tailscale</span><span>Caddy</span>
+            </div>
+          </article>
+
+          <article class="project-card">
+            <div class="project-top">
+              <h3>Pirate Survival</h3>
+              <span class="status-chip dev">In development</span>
+            </div>
+            <p class="desc">An open-world pirate survival game — procedural river systems, an archipelago built in World Partition, and a slow, deliberate build.</p>
+            <div class="project-tags">
+              <span>Unreal Engine 5.7</span><span>C++</span>
+            </div>
+          </article>
+
+          <article class="project-card">
+            <div class="project-top">
+              <h3>PinguHub</h3>
+              <span class="status-chip live">Live</span>
+            </div>
+            <p class="desc">The self-hosted server everything else runs on — media, automation, and a handful of always-on services I maintain myself.</p>
+            <div class="project-tags">
+              <span>Ubuntu</span><span>systemd</span><span>Docker</span>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="about">
+      <div class="wrap about-grid">
+        <div class="about-body">
+          <div class="eyebrow" style="margin-bottom:14px;">About</div>
+          <h2 style="font-size:clamp(24px,3vw,30px); margin-bottom:18px;">Who's building this</h2>
+          <p>I'm Stefan. I build software that runs on hardware I actually own — usually late in the evening, with more terminal tabs open than I'd like to admit.</p>
+          <p>Local-first isn't really a philosophy for me so much as a preference: I'd rather host something myself and understand exactly how it works than hand it to someone else's server. <strong>SAMIDA</strong> is where that preference gets applied most literally — everything else on this page shares the same instinct.</p>
+        </div>
+
+        <div class="now-card">
+          <span class="eyebrow">Right now</span>
+          <ul class="now-list">
+            <li>Running SAMIDA on an always-on Ubuntu box, reachable only over Tailscale</li>
+            <li>Building Pirate Survival's archipelago in Unreal Engine</li>
+            <li>Keeping PinguHub's dozen-odd services alive</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site">
+    <div class="wrap footer-row">
+      <div class="brand"><span class="mark" aria-hidden="true"></span>SAMIDA</div>
+      <div class="foot-meta">
+        <span>© 2026 Stefan Semb</span>
+        <span>app.samida.dev</span>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>
