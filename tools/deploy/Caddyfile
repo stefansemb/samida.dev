@@ -3,7 +3,7 @@
     auto_https disable_redirects
 }
 
-app.samida.dev:8443 {
+app.samida.dev {
     tls {
         dns cloudflare {env.CLOUDFLARE_API_TOKEN}
     }
