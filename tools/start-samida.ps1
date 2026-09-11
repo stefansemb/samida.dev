@@ -3,9 +3,24 @@ param(
     [string]$CamofoxRoot
 )
 
+# Re-launch itself as a hidden background process on first run, so the
+# desktop shortcut never shows a console window. The child inherits
+# SAMIDA_LAUNCHER_HIDDEN from the environment, so it skips this block.
+if (-not $env:SAMIDA_LAUNCHER_HIDDEN) {
+    $env:SAMIDA_LAUNCHER_HIDDEN = '1'
+    $escapedRoot = $CamofoxRoot -replace '"', '""'
+    $arguments = @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+        '-File', "`"$PSCommandPath`"", '-CamofoxRoot', "`"$escapedRoot`""
+    )
+    Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WindowStyle Hidden
+    exit
+}
+
 $ErrorActionPreference = 'Stop'
 $samidaRoot = Split-Path -Parent $PSScriptRoot
 $profileDir = Join-Path $samidaRoot 'data\camofox-profile'
+$stateFile = Join-Path $samidaRoot 'data\samida-runtime.json'
 function Test-Port([int]$Port) { return [bool](Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue) }
 
 if (-not (Test-Path (Join-Path $CamofoxRoot 'server.js'))) {
@@ -19,46 +34,50 @@ $env:SAMIDA_CAMOFOX_ENABLED = 'true'
 $env:SAMIDA_CAMOFOX_BASE_URL = 'http://127.0.0.1:9377'
 $camofoxCache = Join-Path $env:LOCALAPPDATA 'camoufox\camoufox\Cache\version.json'
 
-Write-Host 'Startar Ollama...' -ForegroundColor Magenta
-$ollama = $null
-if (-not (Test-Port 11434)) { $ollama = Start-Process -FilePath 'ollama' -ArgumentList 'serve' -PassThru }
+$ollamaPid = $null
+if (-not (Test-Port 11434)) {
+    $ollama = Start-Process -FilePath 'ollama' -ArgumentList 'serve' -WindowStyle Hidden -PassThru
+    $ollamaPid = $ollama.Id
+}
 
-Write-Host 'Startar CamoFox...' -ForegroundColor Cyan
 if (-not (Test-Path $camofoxCache)) {
-    Write-Host 'Installerar Camoufox-binärer (första gången)...' -ForegroundColor Cyan
     Push-Location $CamofoxRoot
     try { & node 'node_modules\camoufox-js\dist\__main__.js' fetch }
     finally { Pop-Location }
 }
-$camofox = $null
-if (-not (Test-Port 9377)) { $camofox = Start-Process -FilePath 'node' -ArgumentList 'server.js' -WorkingDirectory $CamofoxRoot -PassThru }
-
-try {
-    $ready = $false
-    for ($i = 0; $i -lt 30; $i++) {
-        try {
-            $health = Invoke-RestMethod 'http://127.0.0.1:9377/health' -TimeoutSec 2
-            if ($health.ok) { $ready = $true; break }
-        } catch { Start-Sleep -Seconds 1 }
-    }
-    if (-not $ready) { throw 'CamoFox svarade inte inom 30 sekunder.' }
-
-    Write-Host 'Startar SAMIDA...' -ForegroundColor Green
-    $web = $null
-    if (-not (Test-Port 3000)) { $web = Start-Process -FilePath 'npm.cmd' -ArgumentList 'run dev -- --host 127.0.0.1' -WorkingDirectory (Join-Path $samidaRoot 'web') -PassThru }
-    Start-Process 'http://localhost:3000/'
-    Push-Location $samidaRoot
-    try { & '.venv\Scripts\python.exe' '-m' 'uvicorn' 'server.samida.main:app' '--reload' }
-    finally { Pop-Location }
+$camofoxPid = $null
+if (-not (Test-Port 9377)) {
+    $camofox = Start-Process -FilePath 'node' -ArgumentList 'server.js' -WorkingDirectory $CamofoxRoot -WindowStyle Hidden -PassThru
+    $camofoxPid = $camofox.Id
 }
-finally {
-    if ($camofox -and -not $camofox.HasExited) {
-        Write-Host 'Stoppar CamoFox...' -ForegroundColor Yellow
-        Stop-Process -Id $camofox.Id -Force -ErrorAction SilentlyContinue
-    }
-    if ($ollama -and -not $ollama.HasExited) {
-        Write-Host 'Stoppar Ollama...' -ForegroundColor Yellow
-        Stop-Process -Id $ollama.Id -Force -ErrorAction SilentlyContinue
-    }
-    if ($web -and -not $web.HasExited) { Stop-Process -Id $web.Id -Force -ErrorAction SilentlyContinue }
+
+$ready = $false
+for ($i = 0; $i -lt 30; $i++) {
+    try {
+        $health = Invoke-RestMethod 'http://127.0.0.1:9377/health' -TimeoutSec 2
+        if ($health.ok) { $ready = $true; break }
+    } catch { Start-Sleep -Seconds 1 }
 }
+if (-not $ready) { throw 'CamoFox svarade inte inom 30 sekunder.' }
+
+$webPid = $null
+if (-not (Test-Port 3000)) {
+    $web = Start-Process -FilePath 'npm.cmd' -ArgumentList 'run dev -- --host 127.0.0.1' -WorkingDirectory (Join-Path $samidaRoot 'web') -WindowStyle Hidden -PassThru
+    $webPid = $web.Id
+}
+
+$backendPid = $null
+if (-not (Test-Port 8000)) {
+    $pythonExe = Join-Path $samidaRoot '.venv\Scripts\python.exe'
+    $backend = Start-Process -FilePath $pythonExe -ArgumentList '-m', 'uvicorn', 'server.samida.main:app', '--reload' -WorkingDirectory $samidaRoot -WindowStyle Hidden -PassThru
+    $backendPid = $backend.Id
+}
+
+@{
+    ollama   = $ollamaPid
+    camofox  = $camofoxPid
+    web      = $webPid
+    backend  = $backendPid
+} | ConvertTo-Json | Set-Content -Path $stateFile -Encoding utf8
+
+Start-Process 'http://localhost:3000/'
