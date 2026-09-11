@@ -5,6 +5,7 @@ from samida.camofox import CamoFoxClient
 from samida.config import Settings, get_settings
 from samida.dependencies import get_camofox_client, get_conversation_store, get_ollama_provider
 from samida.main import app
+from samida.providers.base import ChatTurnResult
 from samida.research import ResearchItem, parse_feed, run_research
 from samida.schemas import ChatMessage
 from samida.storage import ConversationStore
@@ -13,9 +14,9 @@ from samida.storage import ConversationStore
 class FakeProvider:
     name = "ollama"
 
-    async def chat(self, messages: list[ChatMessage], model: str):
+    async def chat(self, messages: list[ChatMessage], model: str, tools: list[dict] | None = None):
         self.messages = messages
-        return model, ChatMessage(role="assistant", content="Rapport")
+        return ChatTurnResult(resolved_model=model, message=ChatMessage(role="assistant", content="Rapport"))
 
 
 @pytest.mark.asyncio
