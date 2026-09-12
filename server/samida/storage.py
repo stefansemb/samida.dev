@@ -93,9 +93,62 @@ class ConversationStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_tool_calls_conversation
                     ON tool_calls(conversation_id, created_at);
+                CREATE TABLE IF NOT EXISTS users (
+                    id TEXT PRIMARY KEY,
+                    email TEXT NOT NULL UNIQUE,
+                    password_hash TEXT NOT NULL,
+                    tier TEXT NOT NULL DEFAULT 'full',
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS sessions (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+                CREATE TABLE IF NOT EXISTS provider_credentials (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    provider_kind TEXT NOT NULL CHECK (provider_kind IN ('chat', 'image')),
+                    provider_key TEXT NOT NULL,
+                    api_key_encrypted TEXT NOT NULL,
+                    base_url_override TEXT,
+                    default_model TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE (user_id, provider_kind, provider_key)
+                );
+                CREATE INDEX IF NOT EXISTS idx_provider_credentials_user ON provider_credentials(user_id);
+                CREATE TABLE IF NOT EXISTS model_catalog (
+                    id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL CHECK (kind IN ('chat', 'image')),
+                    provider_key TEXT NOT NULL,
+                    model_name TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    supports_vision INTEGER NOT NULL DEFAULT 0,
+                    supports_tools INTEGER NOT NULL DEFAULT 0,
+                    requires_user_key INTEGER NOT NULL DEFAULT 1,
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    UNIQUE (kind, provider_key, model_name)
+                );
                 PRAGMA optimize;
                 """
             )
+            self._seed_model_catalog(connection)
+            conversation_columns = {row["name"] for row in connection.execute("PRAGMA table_info(conversations)").fetchall()}
+            if "owner_id" not in conversation_columns:
+                connection.execute("ALTER TABLE conversations ADD COLUMN owner_id TEXT REFERENCES users(id)")
+            reminder_owner_columns = {row["name"] for row in connection.execute("PRAGMA table_info(reminders)").fetchall()}
+            if "owner_id" not in reminder_owner_columns:
+                connection.execute("ALTER TABLE reminders ADD COLUMN owner_id TEXT REFERENCES users(id)")
+            research_owner_columns = {row["name"] for row in connection.execute("PRAGMA table_info(research_reports)").fetchall()}
+            if "owner_id" not in research_owner_columns:
+                connection.execute("ALTER TABLE research_reports ADD COLUMN owner_id TEXT REFERENCES users(id)")
+                connection.execute("DROP INDEX IF EXISTS idx_research_reports_idempotency")
             columns = {
                 row["name"]
                 for row in connection.execute("PRAGMA table_info(messages)").fetchall()
@@ -109,7 +162,10 @@ class ConversationStore:
                 connection.execute("ALTER TABLE research_reports ADD COLUMN research_type TEXT NOT NULL DEFAULT 'ai_general'")
             if "idempotency_key" not in research_columns:
                 connection.execute("ALTER TABLE research_reports ADD COLUMN idempotency_key TEXT")
-            connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_research_reports_idempotency ON research_reports(idempotency_key) WHERE idempotency_key IS NOT NULL")
+            connection.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_research_reports_owner_idempotency "
+                "ON research_reports(owner_id, idempotency_key) WHERE idempotency_key IS NOT NULL"
+            )
             reminder_columns = {row["name"] for row in connection.execute("PRAGMA table_info(reminders)").fetchall()}
             if "recurrence" not in reminder_columns:
                 connection.execute("ALTER TABLE reminders ADD COLUMN recurrence TEXT NOT NULL DEFAULT 'once'")
@@ -120,52 +176,224 @@ class ConversationStore:
             if "event_at" not in reminder_columns:
                 connection.execute("ALTER TABLE reminders ADD COLUMN event_at TEXT")
 
-    def list_reminders(self) -> list[dict]:
+    @staticmethod
+    def _seed_model_catalog(connection: sqlite3.Connection) -> None:
+        # Ollama's own models are discovered live via the provider's model_names()
+        # (whatever the operator has pulled), so only the API-key-gated chat
+        # providers are seeded here. Adding a new model for one of these providers
+        # later is a single INSERT — no code change required.
+        seed_rows = [
+            ("chat", "openai", "gpt-5.6-luna", "OpenAI · gpt-5.6-luna", 1, 1, 1, 0),
+            ("chat", "openai", "gpt-5.6-terra", "OpenAI · gpt-5.6-terra", 1, 1, 1, 1),
+            ("chat", "openai", "gpt-5.6-sol", "OpenAI · gpt-5.6-sol", 1, 1, 1, 2),
+            ("chat", "anthropic", "claude-opus-5", "Claude · claude-opus-5", 1, 1, 1, 0),
+            ("chat", "anthropic", "claude-sonnet-5", "Claude · claude-sonnet-5", 1, 1, 1, 1),
+            ("chat", "anthropic", "claude-haiku-4-5", "Claude · claude-haiku-4-5", 1, 1, 1, 2),
+        ]
+        for kind, provider_key, model_name, display_name, vision, tools, requires_key, sort_order in seed_rows:
+            connection.execute(
+                "INSERT OR IGNORE INTO model_catalog "
+                "(id, kind, provider_key, model_name, display_name, supports_vision, "
+                "supports_tools, requires_user_key, sort_order, enabled) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+                (str(uuid4()), kind, provider_key, model_name, display_name, vision, tools, requires_key, sort_order),
+            )
+
+    def list_model_catalog(self, kind: str) -> list[dict]:
         with self._connect() as connection:
-            rows = connection.execute("SELECT * FROM reminders ORDER BY done, due_at").fetchall()
+            rows = connection.execute(
+                "SELECT provider_key, model_name, display_name, supports_vision, supports_tools, "
+                "requires_user_key FROM model_catalog WHERE kind = ? AND enabled = 1 "
+                "ORDER BY provider_key, sort_order",
+                (kind,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def create_user(self, email: str, password_hash: str) -> dict:
+        user_id = str(uuid4())
+        timestamp = _now()
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    "INSERT INTO users (id, email, password_hash, tier, is_active, created_at) "
+                    "VALUES (?, ?, ?, 'full', 1, ?)",
+                    (user_id, email, password_hash, timestamp),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise StorageError("This email address is already in use.") from exc
+        return self.get_user_by_id(user_id)
+
+    def get_user_by_email(self, email: str) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT id, email, password_hash, tier, is_active, created_at "
+                "FROM users WHERE email = ?",
+                (email,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_user_by_id(self, user_id: str) -> dict:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT id, email, password_hash, tier, is_active, created_at "
+                "FROM users WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+        if row is None:
+            raise NotFoundError("The user does not exist.")
+        return dict(row)
+
+    def create_session(self, token_hash: str, user_id: str, expires_at: str) -> None:
+        timestamp = _now()
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO sessions (id, user_id, created_at, expires_at, last_seen_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (token_hash, user_id, timestamp, expires_at, timestamp),
+            )
+
+    def get_session_with_user(self, token_hash: str) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT s.id AS session_id, s.expires_at, "
+                "u.id AS user_id, u.email, u.tier, u.is_active "
+                "FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?",
+                (token_hash,),
+            ).fetchone()
+            if row is None:
+                return None
+            if row["expires_at"] < _now() or not row["is_active"]:
+                connection.execute("DELETE FROM sessions WHERE id = ?", (token_hash,))
+                return None
+        return dict(row)
+
+    def touch_session(self, token_hash: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE sessions SET last_seen_at = ? WHERE id = ?", (_now(), token_hash)
+            )
+
+    def delete_session(self, token_hash: str) -> None:
+        with self._connect() as connection:
+            connection.execute("DELETE FROM sessions WHERE id = ?", (token_hash,))
+
+    def upsert_provider_credential(
+        self,
+        user_id: str,
+        provider_kind: str,
+        provider_key: str,
+        api_key_encrypted: str,
+        base_url_override: str | None = None,
+        default_model: str | None = None,
+    ) -> dict:
+        timestamp = _now()
+        with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT id FROM provider_credentials WHERE user_id = ? AND provider_kind = ? AND provider_key = ?",
+                (user_id, provider_kind, provider_key),
+            ).fetchone()
+            if existing:
+                connection.execute(
+                    "UPDATE provider_credentials SET api_key_encrypted = ?, base_url_override = ?, "
+                    "default_model = ?, updated_at = ? WHERE id = ?",
+                    (api_key_encrypted, base_url_override, default_model, timestamp, existing["id"]),
+                )
+                credential_id = existing["id"]
+            else:
+                credential_id = str(uuid4())
+                connection.execute(
+                    "INSERT INTO provider_credentials "
+                    "(id, user_id, provider_kind, provider_key, api_key_encrypted, base_url_override, "
+                    "default_model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (credential_id, user_id, provider_kind, provider_key, api_key_encrypted, base_url_override, default_model, timestamp, timestamp),
+                )
+        return self._get_provider_credential_by_id(credential_id)
+
+    def _get_provider_credential_by_id(self, credential_id: str) -> dict:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM provider_credentials WHERE id = ?", (credential_id,)
+            ).fetchone()
+        return dict(row)
+
+    def get_provider_credential(self, user_id: str, provider_kind: str, provider_key: str) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM provider_credentials WHERE user_id = ? AND provider_kind = ? AND provider_key = ?",
+                (user_id, provider_kind, provider_key),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_provider_credentials(self, user_id: str, provider_kind: str) -> list[dict]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT provider_key, base_url_override, default_model, updated_at "
+                "FROM provider_credentials WHERE user_id = ? AND provider_kind = ?",
+                (user_id, provider_kind),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def delete_provider_credential(self, user_id: str, provider_kind: str, provider_key: str) -> None:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM provider_credentials WHERE user_id = ? AND provider_kind = ? AND provider_key = ?",
+                (user_id, provider_kind, provider_key),
+            )
+        if cursor.rowcount == 0:
+            raise NotFoundError("Ingen sparad nyckel hittades.")
+
+    def list_reminders(self, owner_id: str) -> list[dict]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM reminders WHERE owner_id = ? ORDER BY done, due_at", (owner_id,)
+            ).fetchall()
         return [{**dict(row), "done": bool(row["done"])} for row in rows]
 
-    def create_reminder(self, text: str, due_at: str, recurrence: str = "once", range_start: int | None = None, range_end: int | None = None, event_at: str | None = None) -> dict:
+    def create_reminder(self, owner_id: str, text: str, due_at: str, recurrence: str = "once", range_start: int | None = None, range_end: int | None = None, event_at: str | None = None) -> dict:
         item = {"id": str(uuid4()), "text": text.strip(), "due_at": due_at, "event_at": event_at, "recurrence": recurrence, "range_start": range_start, "range_end": range_end, "done": False, "created_at": _now()}
         with self._connect() as connection:
-            connection.execute("INSERT INTO reminders (id,text,due_at,event_at,done,created_at,recurrence,range_start,range_end) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)", (item["id"], item["text"], due_at, event_at, item["created_at"], recurrence, range_start, range_end))
+            connection.execute("INSERT INTO reminders (id,text,due_at,event_at,done,created_at,recurrence,range_start,range_end,owner_id) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)", (item["id"], item["text"], due_at, event_at, item["created_at"], recurrence, range_start, range_end, owner_id))
         return item
 
-    def complete_reminder(self, reminder_id: str) -> None:
+    def complete_reminder(self, reminder_id: str, owner_id: str) -> None:
         with self._connect() as connection:
-            connection.execute("UPDATE reminders SET done=1 WHERE id=?", (reminder_id,))
+            cursor = connection.execute("UPDATE reminders SET done=1 WHERE id=? AND owner_id=?", (reminder_id, owner_id))
+        if cursor.rowcount == 0:
+            raise NotFoundError("The reminder does not exist.")
 
-    def delete_reminder(self, reminder_id: str) -> None:
+    def delete_reminder(self, reminder_id: str, owner_id: str) -> None:
         with self._connect() as connection:
-            connection.execute("DELETE FROM reminders WHERE id=?", (reminder_id,))
+            cursor = connection.execute("DELETE FROM reminders WHERE id=? AND owner_id=?", (reminder_id, owner_id))
+        if cursor.rowcount == 0:
+            raise NotFoundError("The reminder does not exist.")
 
-    def list_research_reports(self, research_type: str = "ai_general") -> list[dict]:
+    def list_research_reports(self, owner_id: str, research_type: str = "ai_general") -> list[dict]:
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT id, created_at, title, content, sources_json, research_type "
-                "FROM research_reports WHERE research_type = ? ORDER BY created_at DESC",
-                (research_type,),
+                "FROM research_reports WHERE owner_id = ? AND research_type = ? ORDER BY created_at DESC",
+                (owner_id, research_type),
             ).fetchall()
         return [self._research_dict(row) for row in rows]
 
-    def create_research_report(self, content: str, sources: list[str], research_type: str = "ai_general", idempotency_key: str | None = None) -> dict:
+    def create_research_report(self, owner_id: str, content: str, sources: list[str], research_type: str = "ai_general", idempotency_key: str | None = None) -> dict:
         if idempotency_key:
-            existing = self.get_research_report_by_idempotency_key(idempotency_key)
+            existing = self.get_research_report_by_idempotency_key(owner_id, idempotency_key)
             if existing:
                 return existing
         report_id = str(uuid4())
         timestamp = _now()
-        title = "Mobilappar & trender" if research_type == "mobile_apps" else "AI-omvärldsbevakning"
+        title = "Mobile apps & trends" if research_type == "mobile_apps" else "AI industry watch"
         try:
             with self._connect() as connection:
                 connection.execute(
                     "INSERT INTO research_reports "
-                    "(id, created_at, title, content, sources_json, research_type, idempotency_key) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (report_id, timestamp, title, content, json.dumps(sources), research_type, idempotency_key),
+                    "(id, created_at, title, content, sources_json, research_type, idempotency_key, owner_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (report_id, timestamp, title, content, json.dumps(sources), research_type, idempotency_key, owner_id),
                 )
         except sqlite3.IntegrityError:
             if idempotency_key:
-                existing = self.get_research_report_by_idempotency_key(idempotency_key)
+                existing = self.get_research_report_by_idempotency_key(owner_id, idempotency_key)
                 if existing:
                     return existing
             raise
@@ -173,56 +401,58 @@ class ConversationStore:
             {"id": report_id, "created_at": timestamp, "title": title, "content": content, "sources_json": json.dumps(sources), "research_type": research_type}
         )
 
-    def get_research_report_by_idempotency_key(self, key: str) -> dict | None:
+    def get_research_report_by_idempotency_key(self, owner_id: str, key: str) -> dict | None:
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT id, created_at, title, content, sources_json, research_type FROM research_reports WHERE idempotency_key = ?",
-                (key,),
+                "SELECT id, created_at, title, content, sources_json, research_type "
+                "FROM research_reports WHERE owner_id = ? AND idempotency_key = ?",
+                (owner_id, key),
             ).fetchone()
         return self._research_dict(row) if row else None
 
-    def list_conversations(self) -> list[dict]:
+    def list_conversations(self, owner_id: str) -> list[dict]:
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT id, title, created_at, updated_at "
-                "FROM conversations ORDER BY updated_at DESC"
+                "FROM conversations WHERE owner_id = ? ORDER BY updated_at DESC",
+                (owner_id,),
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def create_conversation(self, title: str = "Ny chatt") -> dict:
+    def create_conversation(self, owner_id: str, title: str = "New chat") -> dict:
         conversation_id = str(uuid4())
         timestamp = _now()
         with self._connect() as connection:
             connection.execute(
-                "INSERT INTO conversations (id, title, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?)",
-                (conversation_id, title.strip(), timestamp, timestamp),
+                "INSERT INTO conversations (id, title, created_at, updated_at, owner_id) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (conversation_id, title.strip(), timestamp, timestamp, owner_id),
             )
-        return self.get_conversation(conversation_id)
+        return self.get_conversation(conversation_id, owner_id)
 
-    def get_conversation(self, conversation_id: str) -> dict:
+    def get_conversation(self, conversation_id: str, owner_id: str) -> dict:
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT id, title, created_at, updated_at FROM conversations "
-                "WHERE id = ?",
-                (conversation_id,),
+                "WHERE id = ? AND owner_id = ?",
+                (conversation_id, owner_id),
             ).fetchone()
         if row is None:
-            raise NotFoundError("Chatten finns inte.")
+            raise NotFoundError("The chat does not exist.")
         return dict(row)
 
-    def rename_conversation(self, conversation_id: str, title: str) -> dict:
+    def rename_conversation(self, conversation_id: str, owner_id: str, title: str) -> dict:
         timestamp = _now()
         with self._connect() as connection:
             cursor = connection.execute(
-                "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?",
-                (title.strip(), timestamp, conversation_id),
+                "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ? AND owner_id = ?",
+                (title.strip(), timestamp, conversation_id, owner_id),
             )
         if cursor.rowcount == 0:
-            raise NotFoundError("Chatten finns inte.")
-        return self.get_conversation(conversation_id)
+            raise NotFoundError("The chat does not exist.")
+        return self.get_conversation(conversation_id, owner_id)
 
-    def delete_conversation(self, conversation_id: str) -> None:
+    def delete_conversation(self, conversation_id: str, owner_id: str) -> None:
         with self._connect() as connection:
             image_rows = connection.execute(
                 "SELECT image_filename FROM messages "
@@ -230,15 +460,15 @@ class ConversationStore:
                 (conversation_id,),
             ).fetchall()
             cursor = connection.execute(
-                "DELETE FROM conversations WHERE id = ?", (conversation_id,)
+                "DELETE FROM conversations WHERE id = ? AND owner_id = ?", (conversation_id, owner_id)
             )
         if cursor.rowcount == 0:
-            raise NotFoundError("Chatten finns inte.")
+            raise NotFoundError("The chat does not exist.")
         for row in image_rows:
             self._attachment_path(row["image_filename"]).unlink(missing_ok=True)
 
-    def messages(self, conversation_id: str) -> list[dict]:
-        self.get_conversation(conversation_id)
+    def messages(self, conversation_id: str, owner_id: str) -> list[dict]:
+        self.get_conversation(conversation_id, owner_id)
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT m.id, m.role, m.content, m.image_filename, m.ocr_text, m.created_at, "
@@ -250,8 +480,8 @@ class ConversationStore:
             ).fetchall()
         return [self._message_dict(row) for row in rows]
 
-    def model_messages(self, conversation_id: str) -> list[dict]:
-        self.get_conversation(conversation_id)
+    def model_messages(self, conversation_id: str, owner_id: str) -> list[dict]:
+        self.get_conversation(conversation_id, owner_id)
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT role, content, image_filename, ocr_text FROM messages "
@@ -263,7 +493,7 @@ class ConversationStore:
             content = row["content"]
             if row["ocr_text"]:
                 content = (
-                    f"{content}\n\n[Lokalt OCR-utdrag från bilden]\n"
+                    f"{content}\n\n[Local OCR excerpt from the image]\n"
                     f"{row['ocr_text']}"
                 ).strip()
             item = {"role": row["role"], "content": content, "images": []}
@@ -276,13 +506,15 @@ class ConversationStore:
     def add_exchange(
         self,
         conversation_id: str,
+        owner_id: str,
         user_content: str,
         assistant_content: str,
         image_filename: str | None,
         ocr_text: str | None = None,
         assistant_tool_call_id: str | None = None,
+        assistant_image_filename: str | None = None,
     ) -> tuple[dict, dict, dict]:
-        self.get_conversation(conversation_id)
+        self.get_conversation(conversation_id, owner_id)
         user_id = str(uuid4())
         assistant_id = str(uuid4())
         user_time = _now()
@@ -304,8 +536,8 @@ class ConversationStore:
             connection.execute(
                 "INSERT INTO messages "
                 "(id, conversation_id, role, content, image_filename, ocr_text, created_at, tool_call_id) "
-                "VALUES (?, ?, 'assistant', ?, NULL, NULL, ?, ?)",
-                (assistant_id, conversation_id, assistant_content, assistant_time, assistant_tool_call_id),
+                "VALUES (?, ?, 'assistant', ?, ?, NULL, ?, ?)",
+                (assistant_id, conversation_id, assistant_content, assistant_image_filename, assistant_time, assistant_tool_call_id),
             )
             connection.execute(
                 "UPDATE conversations SET updated_at = ? WHERE id = ?",
@@ -314,42 +546,45 @@ class ConversationStore:
             current = connection.execute(
                 "SELECT title FROM conversations WHERE id = ?", (conversation_id,)
             ).fetchone()
-            if current and current["title"] == "Ny chatt":
-                generated_title = user_content.strip() or "Skärmdump"
+            if current and current["title"] == "New chat":
+                generated_title = user_content.strip() or "Screenshot"
                 generated_title = generated_title.replace("\n", " ")[:60]
                 connection.execute(
                     "UPDATE conversations SET title = ? WHERE id = ?",
                     (generated_title, conversation_id),
                 )
-        messages = self.messages(conversation_id)
-        return self.get_conversation(conversation_id), messages[-2], messages[-1]
+        messages = self.messages(conversation_id, owner_id)
+        return self.get_conversation(conversation_id, owner_id), messages[-2], messages[-1]
 
     def append_assistant_message(
         self,
         conversation_id: str,
+        owner_id: str,
         content: str,
         tool_call_id: str | None = None,
+        image_filename: str | None = None,
     ) -> tuple[dict, dict]:
-        self.get_conversation(conversation_id)
+        self.get_conversation(conversation_id, owner_id)
         message_id = str(uuid4())
         timestamp = _now()
         with self._connect() as connection:
             connection.execute(
                 "INSERT INTO messages "
                 "(id, conversation_id, role, content, image_filename, ocr_text, created_at, tool_call_id) "
-                "VALUES (?, ?, 'assistant', ?, NULL, NULL, ?, ?)",
-                (message_id, conversation_id, content, timestamp, tool_call_id),
+                "VALUES (?, ?, 'assistant', ?, ?, NULL, ?, ?)",
+                (message_id, conversation_id, content, image_filename, timestamp, tool_call_id),
             )
             connection.execute(
                 "UPDATE conversations SET updated_at = ? WHERE id = ?",
                 (timestamp, conversation_id),
             )
-        messages = self.messages(conversation_id)
-        return self.get_conversation(conversation_id), messages[-1]
+        messages = self.messages(conversation_id, owner_id)
+        return self.get_conversation(conversation_id, owner_id), messages[-1]
 
     def create_pending_tool_call(
         self,
         conversation_id: str,
+        owner_id: str,
         tool_call_id: str,
         tool_name: str,
         arguments: dict,
@@ -359,7 +594,7 @@ class ConversationStore:
         profile: str,
         working_directory: str,
     ) -> dict:
-        self.get_conversation(conversation_id)
+        self.get_conversation(conversation_id, owner_id)
         timestamp = _now()
         with self._connect() as connection:
             connection.execute(
@@ -380,27 +615,31 @@ class ConversationStore:
                     timestamp,
                 ),
             )
-        return self.get_tool_call(tool_call_id)
+        return self.get_tool_call(tool_call_id, owner_id)
 
-    def get_tool_call(self, tool_call_id: str) -> dict:
+    def get_tool_call(self, tool_call_id: str, owner_id: str) -> dict:
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT * FROM tool_calls WHERE id = ?", (tool_call_id,)
+                "SELECT tc.* FROM tool_calls tc "
+                "JOIN conversations c ON c.id = tc.conversation_id "
+                "WHERE tc.id = ? AND c.owner_id = ?",
+                (tool_call_id, owner_id),
             ).fetchone()
         if row is None:
-            raise NotFoundError("Verktygsanropet finns inte.")
+            raise NotFoundError("The tool call does not exist.")
         return self._tool_call_dict(row)
 
-    def resolve_tool_call(self, tool_call_id: str, status: str, result: dict | None = None) -> dict:
+    def resolve_tool_call(self, tool_call_id: str, owner_id: str, status: str, result: dict | None = None) -> dict:
         with self._connect() as connection:
             cursor = connection.execute(
                 "UPDATE tool_calls SET status = ?, result_json = ?, resolved_at = ? "
-                "WHERE id = ? AND status = 'pending'",
-                (status, json.dumps(result) if result is not None else None, _now(), tool_call_id),
+                "WHERE id = ? AND status = 'pending' "
+                "AND conversation_id IN (SELECT id FROM conversations WHERE owner_id = ?)",
+                (status, json.dumps(result) if result is not None else None, _now(), tool_call_id, owner_id),
             )
         if cursor.rowcount == 0:
-            raise NotFoundError("Verktygsanropet finns inte eller är redan hanterat.")
-        return self.get_tool_call(tool_call_id)
+            raise NotFoundError("The tool call does not exist or has already been resolved.")
+        return self.get_tool_call(tool_call_id, owner_id)
 
     @staticmethod
     def _tool_call_dict(row: sqlite3.Row) -> dict:
@@ -414,9 +653,9 @@ class ConversationStore:
         try:
             payload = base64.b64decode(image.data_base64, validate=True)
         except (ValueError, binascii.Error) as exc:
-            raise StorageError("Bilden innehåller ogiltig base64-data.") from exc
+            raise StorageError("The image contains invalid base64 data.") from exc
         if len(payload) > 10 * 1024 * 1024:
-            raise StorageError("Bilden är större än 10 MB.")
+            raise StorageError("The image is larger than 10 MB.")
         signatures = {
             "image/png": (b"\x89PNG\r\n\x1a\n", ".png"),
             "image/jpeg": (b"\xff\xd8\xff", ".jpg"),
@@ -424,25 +663,47 @@ class ConversationStore:
         }
         signature, extension = signatures[image.mime_type]
         if not payload.startswith(signature):
-            raise StorageError("Bildens innehåll stämmer inte med filtypen.")
+            raise StorageError("The image content does not match its file type.")
         if image.mime_type == "image/webp" and payload[8:12] != b"WEBP":
-            raise StorageError("Ogiltig WebP-bild.")
+            raise StorageError("Invalid WebP image.")
         filename = f"{uuid4()}{extension}"
         self._attachment_path(filename).write_bytes(payload)
         return filename, image.data_base64
 
+    def save_generated_image(self, image_bytes: bytes, mime_type: str) -> str:
+        extensions = {
+            "image/png": ".png",
+            "image/jpeg": ".jpg",
+            "image/jpg": ".jpg",
+            "image/webp": ".webp",
+        }
+        extension = extensions.get(mime_type.lower(), ".png")
+        filename = f"{uuid4()}{extension}"
+        self._attachment_path(filename).write_bytes(image_bytes)
+        return filename
+
+    def attachment_owner_id(self, filename: str) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT c.owner_id FROM messages m "
+                "JOIN conversations c ON c.id = m.conversation_id "
+                "WHERE m.image_filename = ?",
+                (filename,),
+            ).fetchone()
+        return row["owner_id"] if row else None
+
     def attachment_path(self, filename: str) -> Path:
         path = self._attachment_path(filename)
         if not path.is_file():
-            raise NotFoundError("Bilden finns inte.")
+            raise NotFoundError("The image does not exist.")
         return path
 
     def _attachment_path(self, filename: str) -> Path:
         if Path(filename).name != filename:
-            raise StorageError("Ogiltigt bildnamn.")
+            raise StorageError("Invalid image filename.")
         path = (self.attachments_dir / filename).resolve()
         if path.parent != self.attachments_dir:
-            raise StorageError("Ogiltig bildsökväg.")
+            raise StorageError("Invalid image path.")
         return path
 
     @staticmethod

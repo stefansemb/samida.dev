@@ -10,18 +10,20 @@ import {
   useRef,
   useState,
 } from 'react';
+import { useRouter } from 'next/navigation';
+import { API_URL, CurrentUser, fetchCurrentUser, logout, requestJson } from '@/lib/api';
+import { SamidaMark } from '@/components/samida-mark';
 import {
   BrainCircuit,
   Circle,
   Clock3,
-  ExternalLink,
   FileText,
   Gauge,
   Image as ImageIcon,
-  Radar,
+  LogOut,
+  Settings as SettingsIcon,
   Pencil,
   Plus,
-  RefreshCw,
   Send,
   ShieldCheck,
   Trash2,
@@ -29,6 +31,7 @@ import {
   X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -39,6 +42,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import {
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverTitle,
+  PopoverTrigger,
+} from '@/components/ui/popover';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 type PendingToolCall = {
   id: string;
@@ -64,6 +75,15 @@ type Conversation = {
   updated_at: string;
 };
 type ConversationDetail = Conversation & { messages: Message[] };
+type ModelCatalogEntry = {
+  provider_key: string;
+  model_name: string;
+  display_name: string;
+  supports_vision: boolean;
+  supports_tools: boolean;
+  requires_user_key: boolean;
+  usable: boolean;
+};
 type Health = {
   status: 'ok' | 'degraded';
   ollama_reachable: boolean;
@@ -72,8 +92,6 @@ type Health = {
   configured_vision_model: string;
   vision_model_available: boolean;
   available_models: string[];
-  openai_configured: boolean;
-  anthropic_configured: boolean;
 };
 type PendingImage = {
   filename: string;
@@ -110,44 +128,7 @@ type WebMcpTool = {
   execute(input: unknown): unknown;
 };
 
-type AppView = 'chat' | 'reminders' | 'research';
-type ResearchReport = {
-  id: string;
-  created_at: string;
-  title: string;
-  content: string;
-  sources: string[];
-  research_type: ResearchType;
-};
-type ResearchType = 'ai_general' | 'mobile_apps';
-
-function SamidaMark() {
-  return (
-    <svg
-      aria-hidden="true"
-      fill="none"
-      height="31"
-      viewBox="0 0 32 32"
-      width="31"
-    >
-      <path
-        d="M4.5 8A4.5 4.5 0 0 1 9 3.5h14A4.5 4.5 0 0 1 27.5 8v9A4.5 4.5 0 0 1 23 21.5h-6.2L9 27v-5.7a4.5 4.5 0 0 1-4.5-4.3V8Z"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.7"
-      />
-      <path
-        d="M10 11.5h1m9 0h1M9.5 15.5h13m-6.5 6v3m-4-1h8"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeWidth="1.7"
-      />
-      <circle cx="10.5" cy="11.5" fill="currentColor" r="1.35" />
-      <circle cx="21.5" cy="11.5" fill="currentColor" r="1.35" />
-    </svg>
-  );
-}
+type AppView = 'chat' | 'reminders';
 
 declare global {
   interface Document {
@@ -160,32 +141,11 @@ declare global {
   }
 }
 
-const API_URL =
-  process.env.NEXT_PUBLIC_SAMIDA_API_URL ?? 'http://127.0.0.1:8000';
 const DEFAULT_MODEL = 'gemma4:e4b';
 const greeting: Message = {
   role: 'assistant',
-  content:
-    'Hej Stefan. Jag är ansluten lokalt och redo att hjälpa dig. Vad vill du arbeta med?',
+  content: "Hi! I'm connected and ready to help. What would you like to work on?",
 };
-
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_URL}${path}`, init);
-  if (!response.ok) {
-    const failure: unknown = await response.json().catch(() => null);
-    const detail =
-      typeof failure === 'object' && failure !== null && 'detail' in failure
-        ? failure.detail
-        : null;
-    throw new Error(
-      typeof detail === 'string'
-        ? detail
-        : 'SAMIDA kunde inte genomföra åtgärden.',
-    );
-  }
-  if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
-}
 
 function argText(value: unknown): string {
   return typeof value === 'string' ? value : value == null ? '' : JSON.stringify(value);
@@ -204,25 +164,25 @@ function resolveProviderModel(selectedModel: string): { provider: 'ollama' | 'op
 function modelLabel(model: string): string {
   const { provider, model: name } = resolveProviderModel(model);
   if (provider === 'openai') return `OpenAI · ${name}`;
-  if (provider === 'anthropic') return `Claude · ${name}`;
+  if (provider === 'anthropic') return `Claude · ${name.replace(/^claude-/i, '')}`;
   return model;
 }
 
 function fileToImage(file: File): Promise<PendingImage> {
   return new Promise((resolve, reject) => {
     if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
-      reject(new Error('Använd PNG, JPEG eller WebP.'));
+      reject(new Error('Use PNG, JPEG, or WebP.'));
       return;
     }
     if (file.size > 10 * 1024 * 1024) {
-      reject(new Error('Skärmdumpen får vara högst 10 MB.'));
+      reject(new Error('The screenshot can be at most 10 MB.'));
       return;
     }
     const reader = new FileReader();
-    reader.onerror = () => reject(new Error('Skärmdumpen kunde inte läsas.'));
+    reader.onerror = () => reject(new Error('The screenshot could not be read.'));
     reader.onload = () => {
       if (typeof reader.result !== 'string') {
-        reject(new Error('Skärmdumpen kunde inte läsas.'));
+        reject(new Error('The screenshot could not be read.'));
         return;
       }
       const dataUrl = reader.result;
@@ -235,123 +195,6 @@ function fileToImage(file: File): Promise<PendingImage> {
     };
     reader.readAsDataURL(file);
   });
-}
-
-function ResearchPanel() {
-  const [researchType, setResearchType] = useState<ResearchType>('ai_general');
-  const [reports, setReports] = useState<ResearchReport[]>([]);
-  const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
-  const [isRunning, setIsRunning] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const loadRequestRef = useRef(0);
-  const researchTypeRef = useRef<ResearchType>('ai_general');
-
-  useEffect(() => {
-    const requestId = ++loadRequestRef.current;
-    const controller = new AbortController();
-    void requestJson<ResearchReport[]>(`/api/research/reports?research_type=${researchType}`, { signal: controller.signal })
-      .then((loaded) => {
-        if (requestId === loadRequestRef.current) setReports(loaded);
-      })
-      .catch((caught) => {
-        if (requestId === loadRequestRef.current && !(caught instanceof DOMException && caught.name === 'AbortError')) {
-          setError(caught instanceof Error ? caught.message : 'Rapporterna kunde inte läsas.');
-        }
-      });
-    return () => controller.abort();
-  }, [researchType]);
-
-  function selectResearchType(next: ResearchType) {
-    researchTypeRef.current = next;
-    loadRequestRef.current += 1;
-    setResearchType(next);
-    setReports([]);
-    setSelectedReportId(null);
-    setError(null);
-  }
-
-  async function runResearch() {
-    const requestedType = researchTypeRef.current;
-    setIsRunning(true);
-    setError(null);
-    try {
-      const report = await requestJson<ResearchReport>(`/api/research/run?research_type=${requestedType}`, { method: 'POST' });
-      if (researchTypeRef.current === requestedType) {
-        setReports((current) => [report, ...current]);
-        setSelectedReportId(report.id);
-      }
-    } catch (caught) {
-      if (researchTypeRef.current === requestedType) {
-        setError(caught instanceof Error ? caught.message : 'Research kunde inte köras.');
-      }
-    } finally {
-      setIsRunning(false);
-    }
-  }
-
-  return (
-    <section className="research-workspace">
-      <header className="research-header">
-        <div>
-          <span className="eyebrow">Omvärldsbevakning</span>
-          <h2>{researchType === 'mobile_apps' ? 'Mobilappar & trender' : 'AI-research'}</h2>
-          <p>{researchType === 'mobile_apps' ? 'Veckovis spaning efter trendande appar, verklig efterfrågan och produktluckor.' : 'Daglig bevakning av sådant som är nytt, användbart och värt att följa inom AI.'}</p>
-        </div>
-        <button className="research-action" disabled={isRunning} onClick={() => void runResearch()} type="button">
-          <RefreshCw className={isRunning ? 'spin' : ''} size={16} /> {isRunning ? 'Research körs...' : 'Kör nu'}
-        </button>
-      </header>
-
-      <div className="research-content">
-        <div className="research-type-tabs" role="tablist" aria-label="Researchtyp">
-          <button className={researchType === 'ai_general' ? 'active' : ''} onClick={() => selectResearchType('ai_general')} role="tab" type="button">AI och teknik</button>
-          <button className={researchType === 'mobile_apps' ? 'active' : ''} onClick={() => selectResearchType('mobile_apps')} role="tab" type="button">Mobilappar & trender</button>
-        </div>
-        <section className="research-hero">
-          <div className="research-hero-icon"><Radar size={28} /></div>
-          <div>
-            <span className="eyebrow">{researchType === 'mobile_apps' ? 'Veckovis research' : 'Daglig research'}</span>
-            <h3>{researchType === 'mobile_apps' ? 'Hitta appbehov värda att bygga för' : 'Följ AI-utvecklingen praktiskt'}</h3>
-            <p>
-              {researchType === 'mobile_apps' ? 'Rapporterna letar efter efterfrågan, återkommande problem, konkurrenter och små MVP:er. Din personliga träningsapp behandlas separat från marknadsidéerna.' : 'Här kommer dagliga rapporter om AI-plattformar, GitHub-projekt, plugins, agenter, lokala modeller och nya möjligheter.'}
-            </p>
-          </div>
-        </section>
-
-        <div className="research-grid">
-          <section className="research-card">
-            <div className="panel-heading"><Clock3 size={18} /><h3>Rapporthistorik</h3></div>
-            {error && <p className="research-error">{error}</p>}
-            {reports.length === 0 && !error && <p className="empty-research">Inga rapporter ännu. Kör den första researchen med knappen ovan.</p>}
-            {reports.length > 0 && <div className="report-list">{reports.map((report) => <button className={`report-item ${selectedReportId === report.id ? 'active' : ''}`} key={report.id} onClick={() => setSelectedReportId(report.id)} type="button"><strong>{report.title}</strong><span>{new Date(report.created_at).toLocaleString('sv-SE')}</span></button>)}</div>}
-          </section>
-          <section className="research-card">
-            <div className="panel-heading"><FileText size={18} /><h3>Bevakningsområden</h3></div>
-            <ul className="research-topics">{researchType === 'mobile_apps' ? <><li>Trendande mobilappar</li><li>Användarbehov och efterfrågan</li><li>Konkurrenter och marknadsluckor</li><li>Lovande MVP-idéer</li><li>Hållbara trender kontra hype</li></> : <><li>AI-plattformar och trender</li><li>GitHub-projekt och plugins</li><li>AI-agenter och system</li><li>Lokala LLM-modeller</li><li>Praktiska sätt att använda AI</li></>}</ul>
-          </section>
-        </div>
-
-        {reports.find((report) => report.id === selectedReportId) && (() => {
-          const report = reports.find((item) => item.id === selectedReportId)!;
-          return (
-            <article className="report-view">
-              <div className="report-view-heading">
-                <div><span className="eyebrow">Vald rapport</span><h3>{report.title}</h3></div>
-                <span>{new Date(report.created_at).toLocaleString('sv-SE')}</span>
-              </div>
-              <div className="report-content">{report.content}</div>
-              <div className="report-sources">
-                <strong>Källor</strong>
-                {report.sources.map((source) => <a href={source} key={source} rel="noreferrer" target="_blank">{source} <ExternalLink size={12} /></a>)}
-              </div>
-            </article>
-          );
-        })()}
-
-        <p className="research-note"><ExternalLink size={14} /> Källor och länkar visas tillsammans med varje framtida rapport.</p>
-      </div>
-    </section>
-  );
 }
 
 function RemindersPanel() {
@@ -367,7 +210,7 @@ function RemindersPanel() {
         const now = new Date();
         items.filter((r) => !r.done && new Date(r.due_at).getTime() <= now.getTime() && now.getTime() - new Date(r.due_at).getTime() < 120000).forEach((r) => {
           const key = `samida-notified-${r.id}-${now.toISOString().slice(0, 10)}`;
-          if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && !sessionStorage.getItem(key)) { new Notification('SAMIDA-påminnelse', { body: r.text }); sessionStorage.setItem(key, '1'); }
+          if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && !sessionStorage.getItem(key)) { new Notification('SAMIDA reminder', { body: r.text }); sessionStorage.setItem(key, '1'); }
         });
       }).catch(() => undefined);
     }, 60000);
@@ -378,24 +221,28 @@ function RemindersPanel() {
   async function remove(id: string) { await requestJson(`/api/reminders/${id}`, {method:'DELETE'}); load(); }
   return (
     <section className="research-workspace">
-      <header className="research-header"><div><span className="eyebrow">Planering</span><h2>Reminders</h2><p>Skapa och hantera dina lokala påminnelser.</p></div></header>
-      <div className="reminder-event-control"><label>Händelse kl.<input type="datetime-local" value={eventAt} onChange={(e) => setEventAt(e.target.value)} /></label><span>Påminnelsen ställs in i fältet När nedan.</span></div>
-      <div className="research-content"><section className="research-card"><form onSubmit={(e) => void addReminder(e)} className="reminder-form"><label>Påminnelse<input value={text} onChange={(e) => setText(e.target.value)} placeholder="Vad ska du komma ihåg?" required /></label><label>När<input type="datetime-local" value={dueAt} onChange={(e) => setDueAt(e.target.value)} required /></label><label>Återkomst<select value={recurrence} onChange={(e) => setRecurrence(e.target.value)}><option value="once">En gång</option><option value="daily">Dagligen</option><option value="weekly">Veckovis</option><option value="monthly">Månadsvis</option><option value="monthly_range">Dagspann varje månad</option></select></label>{recurrence === 'monthly_range' && <><label>Från dag<input type="number" min="1" max="31" value={rangeStart} onChange={(e) => setRangeStart(e.target.value)} /></label><label>Till dag<input type="number" min="1" max="31" value={rangeEnd} onChange={(e) => setRangeEnd(e.target.value)} /></label></>}<button className="reminder-submit" type="submit">+ Lägg till</button></form>{reminders.length === 0 ? <p className="empty-research">Inga påminnelser ännu. Lägg till din första ovan.</p> : reminders.map((r) => <div key={r.id} className="reminder-item"><span>{r.done ? '✓' : '○'} {r.text}<small>{r.due_at} · {r.recurrence}</small></span><span>{!r.done && <button onClick={() => void complete(r.id)} type="button">Klar</button>} <button onClick={() => void remove(r.id)} type="button">Ta bort</button></span></div>)}</section></div>
+      <header className="research-header"><div><span className="eyebrow">Planning</span><h2>Reminders</h2><p>Create and manage your reminders.</p></div></header>
+      <div className="reminder-event-control"><label>Event at<input type="datetime-local" value={eventAt} onChange={(e) => setEventAt(e.target.value)} /></label><span>The reminder itself is set in the When field below.</span></div>
+      <div className="research-content"><section className="research-card"><form onSubmit={(e) => void addReminder(e)} className="reminder-form"><label>Reminder<input value={text} onChange={(e) => setText(e.target.value)} placeholder="What do you want to remember?" required /></label><label>When<input type="datetime-local" value={dueAt} onChange={(e) => setDueAt(e.target.value)} required /></label><label>Recurrence<select value={recurrence} onChange={(e) => setRecurrence(e.target.value)}><option value="once">Once</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="monthly_range">Day range every month</option></select></label>{recurrence === 'monthly_range' && <><label>From day<input type="number" min="1" max="31" value={rangeStart} onChange={(e) => setRangeStart(e.target.value)} /></label><label>To day<input type="number" min="1" max="31" value={rangeEnd} onChange={(e) => setRangeEnd(e.target.value)} /></label></>}<button className="reminder-submit" type="submit">+ Add</button></form>{reminders.length === 0 ? <p className="empty-research">No reminders yet. Add your first one above.</p> : reminders.map((r) => <div key={r.id} className="reminder-item"><span>{r.done ? '✓' : '○'} {r.text}<small>{r.due_at} · {r.recurrence}</small></span><span>{!r.done && <button onClick={() => void complete(r.id)} type="button">Done</button>} <button onClick={() => void remove(r.id)} type="button">Remove</button></span></div>)}</section></div>
     </section>
   );
 }
 
 export default function Home() {
+  const router = useRouter();
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversation, setActiveConversation] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([greeting]);
   const [draft, setDraft] = useState('');
   const [pendingImage, setPendingImage] = useState<PendingImage | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
+  const [modelCatalog, setModelCatalog] = useState<ModelCatalogEntry[]>([]);
   const [priorities, setPriorities] = useState('');
   const [selectedModel, setSelectedModel] = useState(DEFAULT_MODEL);
   const [selectedProfile, setSelectedProfile] = useState('minimal');
-  const [workingDirectory, setWorkingDirectory] = useState('C:\\AiProjects\\SAMIDA');
+  const [workingDirectory, setWorkingDirectory] = useState('');
   const [pickingWorkspace, setPickingWorkspace] = useState(false);
   const [lastUsedModel, setLastUsedModel] = useState<string | null>(null);
   const [lastUsedProvider, setLastUsedProvider] = useState<string | null>(null);
@@ -419,18 +266,41 @@ export default function Home() {
     return items;
   }, []);
 
+  useEffect(() => {
+    void fetchCurrentUser().then((result) => {
+      if (!result) {
+        router.push('/login');
+        return;
+      }
+      startTransition(() => {
+        setCurrentUser(result);
+        setAuthChecked(true);
+      });
+    });
+  }, [router]);
+
+  const handleLogout = useCallback(async () => {
+    await logout();
+    router.push('/login');
+  }, [router]);
+
   /* oxlint-disable react/react-compiler -- initial data loading synchronizes API state. */
   useEffect(() => {
+    if (!authChecked) return;
     void requestJson<{content:string}>('/api/priorities').then((r) => setPriorities(r.content)).catch(() => undefined);
-  }, []);
+  }, [authChecked]);
   useEffect(() => {
+    if (!authChecked) return;
     void refreshConversations().catch((caught) =>
       startTransition(() => setError(caught.message)),
     );
     requestJson<Health>('/api/health')
       .then((result) => startTransition(() => setHealth(result)))
       .catch(() => startTransition(() => setHealth(null)));
-  }, [refreshConversations]);
+    requestJson<ModelCatalogEntry[]>('/api/models/catalog?kind=chat')
+      .then((result) => startTransition(() => setModelCatalog(result)))
+      .catch(() => startTransition(() => setModelCatalog([])));
+  }, [refreshConversations, authChecked]);
   /* oxlint-enable react/react-compiler */
 
   useEffect(() => {
@@ -445,7 +315,7 @@ export default function Home() {
     const created = await requestJson<Conversation>('/api/conversations', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Ny chatt' }),
+      body: JSON.stringify({ title: 'New chat' }),
     });
     setConversations((current) => [created, ...current]);
     setActiveConversation(created);
@@ -529,8 +399,8 @@ export default function Home() {
   const submitContent = useCallback(
     async (content: string, image: PendingImage | null = null) => {
       const normalized = content.trim();
-      if (!normalized && !image) throw new Error('Skriv något eller klistra in en bild.');
-      if (sendingRef.current) throw new Error('SAMIDA arbetar redan med ett svar.');
+      if (!normalized && !image) throw new Error('Type something or paste an image.');
+      if (sendingRef.current) throw new Error('SAMIDA is already working on a response.');
 
       sendingRef.current = true;
       setIsSending(true);
@@ -583,7 +453,7 @@ export default function Home() {
         return result;
       } catch (caught) {
         const failure =
-          caught instanceof Error ? caught : new Error('Ett okänt fel inträffade.');
+          caught instanceof Error ? caught : new Error('An unknown error occurred.');
         setError(failure.message);
         throw failure;
       } finally {
@@ -610,7 +480,7 @@ export default function Home() {
       const result = await requestJson<{ path: string | null }>('/api/workspace/pick', { method: 'POST' });
       if (result.path) setWorkingDirectory(result.path);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Katalogen kunde inte väljas.');
+      setError(caught instanceof Error ? caught.message : 'The folder could not be selected.');
     } finally {
       setPickingWorkspace(false);
     }
@@ -635,7 +505,7 @@ export default function Home() {
       setPendingImage(await fileToImage(file));
       setError(null);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Bilden kunde inte läsas.');
+      setError(caught instanceof Error ? caught.message : 'The image could not be read.');
     }
   }
 
@@ -647,8 +517,8 @@ export default function Home() {
       modelContext.registerTool(
         {
           name: 'send_chat_message',
-          title: 'Skicka chattmeddelande',
-          description: 'Skicka ett textmeddelande till den aktiva SAMIDA-chatten.',
+          title: 'Send chat message',
+          description: 'Send a text message to the active SAMIDA chat.',
           inputSchema: {
             type: 'object',
             properties: { message: { type: 'string', minLength: 1 } },
@@ -663,7 +533,7 @@ export default function Home() {
               !('message' in input) ||
               typeof input.message !== 'string'
             ) {
-              throw new Error('message måste vara en textsträng.');
+              throw new Error('message must be a string.');
             }
             const result = await submitContent(input.message);
             return {
@@ -686,54 +556,40 @@ export default function Home() {
   const usageStatus = lastUsedProvider === 'openai' || lastUsedProvider === 'anthropic'
     ? 'Se API-dashboard'
     : 'Ingen molnlimit';
-  const availableModels = Array.from(
-    new Set([
-      ...(health?.available_models ?? []),
-      health?.configured_model ?? DEFAULT_MODEL,
-      health?.configured_vision_model ?? 'qwen3-vl:8b',
-    ]),
-  );
-  if (health?.openai_configured) {
-    availableModels.push(
-      'openai:gpt-5.6-luna',
-      'openai:gpt-5.6-terra',
-      'openai:gpt-5.6-sol',
+  const selectableModels = modelCatalog
+    .filter((entry) => entry.usable)
+    .map((entry) =>
+      entry.provider_key === 'ollama' ? entry.model_name : `${entry.provider_key}:${entry.model_name}`,
     );
+
+  if (!authChecked) {
+    return <main className="app-shell" />;
   }
-  if (health?.anthropic_configured) {
-    availableModels.push(
-      'anthropic:claude-opus-5',
-      'anthropic:claude-sonnet-5',
-      'anthropic:claude-haiku-4-5',
-    );
-  }
-  const selectableModels = availableModels.filter((model) => {
-    const normalized = model.toLowerCase();
-    return !normalized.includes('cloud') && !normalized.startsWith('bge-');
-  });
 
   return (
     <main className="app-shell">
-      <nav className="top-nav" aria-label="SAMIDA-sektioner">
-        <button className={`top-nav-button ${activeView === 'chat' ? 'active' : ''}`} onClick={() => setActiveView('chat')} type="button"><BrainCircuit size={15} /> Chatt</button>
-        <button className={`top-nav-button ${activeView === 'reminders' ? 'active' : ''}`} onClick={() => setActiveView('reminders')} type="button"><Clock3 size={15} /> Reminders</button>
-        <button className={`top-nav-button ${activeView === 'research' ? 'active' : ''}`} onClick={() => setActiveView('research')} type="button"><Radar size={15} /> Research</button>
+      <nav className="top-nav" aria-label="SAMIDA sections">
+        <div className="top-nav-group">
+          <button className={`top-nav-button ${activeView === 'chat' ? 'active' : ''}`} onClick={() => setActiveView('chat')} type="button"><BrainCircuit size={15} /> Chat</button>
+          <button className={`top-nav-button ${activeView === 'reminders' ? 'active' : ''}`} onClick={() => setActiveView('reminders')} type="button"><Clock3 size={15} /> Reminders</button>
+          <a className="top-nav-button" href="/settings"><SettingsIcon size={15} /> Settings</a>
+        </div>
       </nav>
       <aside className="identity-panel">
         <div className="brand-lockup">
           <div className="brand-mark" aria-hidden="true">
             <SamidaMark />
           </div>
-          <div><h1>SAMIDA</h1><p>Lokal assistent</p></div>
+          <div><h1>SAMIDA</h1><p>Personal assistant</p></div>
         </div>
 
         <Button className="new-chat-button" onClick={() => void createConversation()}>
-          <Plus size={17} /> Ny chatt
+          <Plus size={17} /> New chat
         </Button>
 
-        <div className="conversation-list" aria-label="Sparade chattar">
-          <span className="list-label">Chattar</span>
-          {conversations.length === 0 && <p className="no-chats">Inga sparade chattar ännu.</p>}
+        <div className="conversation-list" aria-label="Saved chats">
+          <span className="list-label">Chats</span>
+          {conversations.length === 0 && <p className="no-chats">No saved chats yet.</p>}
           {conversations.map((conversation) => (
             <div
               className={`conversation-row ${activeConversation?.id === conversation.id ? 'active' : ''}`}
@@ -741,7 +597,7 @@ export default function Home() {
             >
               {renamingId === conversation.id ? (
                 <input
-                  aria-label="Nytt namn på chatten"
+                  aria-label="New name for the chat"
                   className="rename-input"
                   onBlur={() => void saveRename(conversation)}
                   onChange={(event) => setRenameValue(event.target.value)}
@@ -761,20 +617,20 @@ export default function Home() {
                 </button>
               )}
               <button
-                aria-label={`Byt namn på ${conversation.title}`}
+                aria-label={`Rename ${conversation.title}`}
                 className="row-action"
                 onClick={() => {
                   setRenamingId(conversation.id);
                   setRenameValue(conversation.title);
                 }}
-                title="Byt namn"
+                title="Rename"
                 type="button"
               ><Pencil size={14} /></button>
               <button
-                aria-label={`Ta bort ${conversation.title}`}
+                aria-label={`Delete ${conversation.title}`}
                 className="row-action danger"
                 onClick={() => setDeleteTarget(conversation)}
-                title="Ta bort"
+                title="Delete"
                 type="button"
               ><Trash2 size={14} /></button>
             </div>
@@ -783,47 +639,23 @@ export default function Home() {
 
         <div className="local-note">
           <ShieldCheck size={17} />
-          <div><strong>Lokalt läge</strong><span>Minne och chattar sparas på datorn.</span></div>
+          <div><strong>{currentUser?.email}</strong><span>Inloggad</span></div>
+          <button
+            aria-label="Logga ut"
+            className="logout-button"
+            onClick={() => void handleLogout()}
+            title="Logga ut"
+            type="button"
+          ><LogOut size={14} /></button>
         </div>
       </aside>
 
-      {activeView === 'research' ? <ResearchPanel /> : activeView === 'reminders' ? <RemindersPanel /> : <section className="chat-workspace">
+      {activeView === 'reminders' ? <RemindersPanel /> : <section className="chat-workspace">
         <header className="chat-header">
-          <div><span className="eyebrow">Chatt</span></div>
-          <div className="header-actions">
-            <label className="model-picker">
-              <span>Modell</span>
-              <select
-                aria-label="Välj modell"
-                onChange={(event) => setSelectedModel(event.target.value)}
-                value={selectedModel}
-              >
-                {selectableModels.map((model) => (
-                  <option key={model} value={model}>
-                    {modelLabel(model)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="model-picker">
-              <span>Profil</span>
-              <select aria-label="Välj profil" onChange={(event) => setSelectedProfile(event.target.value)} value={selectedProfile}>
-                <option value="minimal">Minimal</option>
-                <option value="samida-standard">SAMIDA-standard</option>
-                <option value="coding">Kodning</option>
-                <option value="jarvis">Jarvis</option>
-                <option value="unreal">Unreal</option>
-              </select>
-            </label>
-            <label className="model-picker workspace-picker">
-              <span>Arbetskatalog</span>
-              <input aria-label="Arbetskatalog" readOnly value={workingDirectory} />
-              <button className="row-action" disabled={pickingWorkspace} onClick={() => void pickWorkspace()} type="button">{pickingWorkspace ? '...' : 'Välj'}</button>
-            </label>
-          </div>
+          <div><span className="eyebrow">Chat</span></div>
           <div className={`connection-pill connection-status ${connected ? 'online' : ''}`}>
             <Circle size={9} fill="currentColor" />
-            {connected ? 'Ansluten' : 'Kontrollerar anslutning'}
+            {connected ? 'Connected' : 'Checking connection'}
           </div>
         </header>
 
@@ -835,17 +667,17 @@ export default function Home() {
                 {message.role === 'assistant' ? <BrainCircuit size={18} /> : <UserRound size={18} />}
               </div>
               <div>
-                <span className="message-author">{message.role === 'assistant' ? 'SAMIDA' : 'Stefan'}</span>
+                <span className="message-author">{message.role === 'assistant' ? 'SAMIDA' : 'You'}</span>
                 {message.image_url && (
                   <img
-                    alt="Inklistrad skärmdump"
+                    alt="Pasted screenshot"
                     className="message-image"
                     src={message.image_url.startsWith('data:') ? message.image_url : `${API_URL}${message.image_url}`}
                   />
                 )}
                 {message.ocr_text && (
                   <details className="ocr-details">
-                    <summary>Text som OCR läste ur bilden</summary>
+                    <summary>Text OCR read from the image</summary>
                     <pre>{message.ocr_text}</pre>
                   </details>
                 )}
@@ -860,11 +692,11 @@ export default function Home() {
                         : ''}
                       {' · '}
                       {{
-                        pending: 'väntar på godkännande',
-                        rejected: 'avvisad',
-                        executed: 'utförd',
-                        failed: 'misslyckades',
-                        approved: 'godkänd',
+                        pending: 'waiting for approval',
+                        rejected: 'rejected',
+                        executed: 'executed',
+                        failed: 'failed',
+                        approved: 'approved',
                       }[message.tool_call.status]}
                     </span>
                   </div>
@@ -875,7 +707,7 @@ export default function Home() {
           {isSending && (
             <article className="message assistant thinking">
               <div className="message-avatar"><BrainCircuit size={18} /></div>
-              <div><span className="message-author">SAMIDA</span><div className="thinking-dots" aria-label="SAMIDA tänker"><i /><i /><i /></div></div>
+              <div><span className="message-author">SAMIDA</span><div className="thinking-dots" aria-label="SAMIDA is thinking"><i /><i /><i /></div></div>
             </article>
           )}
           <div ref={endRef} />
@@ -885,56 +717,106 @@ export default function Home() {
           {error && <p className="error-message">{error}</p>}
           {pendingImage && (
             <div className="image-preview">
-              <img alt="Skärmdump som ska skickas" src={pendingImage.preview_url} />
-              <span><ImageIcon size={15} /> Skärmdump bifogad</span>
-              <button aria-label="Ta bort skärmdump" onClick={() => setPendingImage(null)} title="Ta bort bild" type="button"><X size={16} /></button>
+              <img alt="Screenshot to send" src={pendingImage.preview_url} />
+              <span><ImageIcon size={15} /> Screenshot attached</span>
+              <button aria-label="Remove screenshot" onClick={() => setPendingImage(null)} title="Remove image" type="button"><X size={16} /></button>
             </div>
           )}
+          <div className="composer-tabs">
+            <Select onValueChange={(value) => setSelectedModel(value as string)} value={selectedModel}>
+              <SelectTrigger aria-label="Choose model" className="composer-tab-trigger" size="sm">
+                <SelectValue>{(value: string) => modelLabel(value)}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {selectableModels.map((model) => (
+                  <SelectItem key={model} value={model}>
+                    {modelLabel(model)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select onValueChange={(value) => setSelectedProfile(value as string)} value={selectedProfile}>
+              <SelectTrigger aria-label="Choose profile" className="composer-tab-trigger" size="sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="minimal">Minimal</SelectItem>
+                <SelectItem value="samida-standard">SAMIDA standard</SelectItem>
+                <SelectItem value="coding">Coding</SelectItem>
+                <SelectItem value="jarvis">Jarvis</SelectItem>
+                <SelectItem value="unreal">Unreal</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
           <form className="composer" onSubmit={sendMessage}>
+            <Popover>
+              <PopoverTrigger
+                aria-label="Working directory"
+                className="composer-plus-button"
+                title="Set the working directory SAMIDA can read and edit files in"
+                type="button"
+              >
+                <Plus size={18} />
+              </PopoverTrigger>
+              <PopoverContent>
+                <PopoverTitle>Working directory</PopoverTitle>
+                <PopoverDescription>
+                  Lets SAMIDA read and edit files in this folder. Leave empty to disable file tools.
+                </PopoverDescription>
+                <Input
+                  onChange={(event) => setWorkingDirectory(event.target.value)}
+                  placeholder="/home/you/project"
+                  value={workingDirectory}
+                />
+                <Button disabled={pickingWorkspace} onClick={() => void pickWorkspace()} type="button" variant="outline">
+                  {pickingWorkspace ? 'Opening…' : 'Choose folder (desktop only)'}
+                </Button>
+              </PopoverContent>
+            </Popover>
             <textarea
-              aria-label="Meddelande till SAMIDA"
+              aria-label="Message to SAMIDA"
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={handleKeyDown}
               onPaste={(event) => void handlePaste(event)}
-              placeholder="Skriv eller klistra in en skärmdump…"
+              placeholder="Type a message or paste a screenshot…"
               rows={1}
               value={draft}
             />
-            <Button aria-label="Skicka meddelande" className="send-button" disabled={(!draft.trim() && !pendingImage) || isSending} size="icon" type="submit"><Send size={18} /></Button>
+            <Button aria-label="Send message" className="send-button" disabled={(!draft.trim() && !pendingImage) || isSending} size="icon" type="submit"><Send size={18} /></Button>
           </form>
-          <p className="composer-hint">Ctrl + V klistrar in en skärmdump · Enter skickar</p>
+          <p className="composer-hint">Ctrl+V pastes a screenshot · Enter sends</p>
         </div>
       </section>}
 
       <aside className="context-panel">
-        <section className="context-card priority-card"><div className="panel-heading"><Circle size={9} fill="currentColor" /><h3>Active priorities</h3></div><div className="priority-content">{(priorities || 'Inga prioriteringar.').split('\n').filter((line) => line.trim() && !line.startsWith('#')).map((line) => <p key={line}>{line.replace(/^- \[[ xX]\]\s*/, '').replace(/^\d+\.\s*/, '')}</p>)}</div></section>
+        <section className="context-card priority-card"><div className="panel-heading"><Circle size={9} fill="currentColor" /><h3>Active priorities</h3></div><div className="priority-content">{(priorities || 'No priorities set.').split('\n').filter((line) => line.trim() && !line.startsWith('#')).map((line) => <p key={line}>{line.replace(/^- \[[ xX]\]\s*/, '').replace(/^\d+\.\s*/, '')}</p>)}</div></section>
         <section className="usage-card">
           <div className="panel-heading"><Gauge size={18} /><h3>Usage</h3></div>
           <dl className="status-list usage-list">
             <div><dt>Provider</dt><dd>{lastUsedProvider ?? 'ollama'}</dd></div>
-            <div><dt>Modell</dt><dd>{lastUsedModel ?? health?.configured_model ?? 'gemma4:e4b'}</dd></div>
-            <div><dt>Denna chatt</dt><dd>{chatMessageCount} meddelanden</dd></div>
+            <div><dt>Model</dt><dd>{lastUsedModel ?? health?.configured_model ?? 'gemma4:e4b'}</dd></div>
+            <div><dt>This chat</dt><dd>{chatMessageCount} messages</dd></div>
             <div><dt>Tokens</dt><dd>{chatUsage?.total_tokens ?? '–'}</dd></div>
             <div><dt>Limit</dt><dd className="good">{usageStatus}</dd></div>
           </dl>
         </section>
         <section className="context-card">
-          <div className="panel-heading"><FileText size={18} /><h3>Använd kontext</h3></div>
-          {contextFiles.length ? <ul>{contextFiles.map((file) => <li key={file}>{file}</li>)}</ul> : <p className="empty-context">Filerna som används visas här efter ditt första meddelande.</p>}
+          <div className="panel-heading"><FileText size={18} /><h3>Context used</h3></div>
+          {contextFiles.length ? <ul>{contextFiles.map((file) => <li key={file}>{file}</li>)}</ul> : <p className="empty-context">The files used will show up here after your first message.</p>}
         </section>
       </aside>
 
       <AlertDialog open={Boolean(deleteTarget)} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Ta bort chatten?</AlertDialogTitle>
+            <AlertDialogTitle>Delete this chat?</AlertDialogTitle>
             <AlertDialogDescription>
-              Chatten ”{deleteTarget?.title}” och dess sparade skärmdumpar tas bort permanent.
+              The chat &ldquo;{deleteTarget?.title}&rdquo; and its saved screenshots will be permanently deleted.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Avbryt</AlertDialogCancel>
-            <AlertDialogAction className="delete-confirm" onClick={() => void deleteConversation()}>Ta bort</AlertDialogAction>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction className="delete-confirm" onClick={() => void deleteConversation()}>Delete</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -946,12 +828,12 @@ export default function Home() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {pendingToolCall?.tool_name === 'write_file' ? 'SAMIDA vill skriva en fil' : 'SAMIDA vill köra ett verktyg'}
+              {pendingToolCall?.tool_name === 'write_file' ? 'SAMIDA wants to write a file' : 'SAMIDA wants to run a tool'}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {pendingToolCall?.tool_name === 'write_file'
-                ? `Skriva till "${argText(pendingToolCall.arguments.path)}" i ${workingDirectory}. Granska innehållet innan du godkänner.`
-                : `Verktyg: ${pendingToolCall?.tool_name ?? ''}.`}
+                ? `Write to "${argText(pendingToolCall.arguments.path)}" in ${workingDirectory}. Review the content before approving.`
+                : `Tool: ${pendingToolCall?.tool_name ?? ''}.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           {pendingToolCall?.tool_name === 'write_file' && (
@@ -961,10 +843,10 @@ export default function Home() {
           )}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={resolvingToolCall} onClick={() => void decideToolCall('reject')}>
-              Avvisa
+              Reject
             </AlertDialogCancel>
             <AlertDialogAction disabled={resolvingToolCall} onClick={() => void decideToolCall('approve')}>
-              Godkänn
+              Approve
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

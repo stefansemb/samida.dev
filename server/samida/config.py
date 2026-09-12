@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     )
     anthropic_model: str = "claude-opus-5"
     anthropic_base_url: str = "https://api.anthropic.com/v1"
+    secret_key: str | None = None
+    cookie_secure: bool = True
     cors_extra_origins: str = ""
     request_timeout_seconds: float = Field(default=120.0, gt=0)
     camofox_enabled: bool = True

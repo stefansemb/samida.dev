@@ -19,11 +19,11 @@ def _image_media_type(raw_base64: str) -> str:
     try:
         payload = base64.b64decode(raw_base64, validate=True)
     except (ValueError, binascii.Error) as exc:
-        raise ProviderError("Bilden innehåller ogiltig base64-data.") from exc
+        raise ProviderError("The image contains invalid base64 data.") from exc
     for signature, media_type in _IMAGE_SIGNATURES:
         if payload.startswith(signature):
             return media_type
-    raise ProviderError("Bildformatet kunde inte identifieras (stöder PNG/JPEG/WebP).")
+    raise ProviderError("Could not identify the image format (supports PNG/JPEG/WebP).")
 
 
 def _format_tools(specs: list[dict]) -> list[dict]:
@@ -100,7 +100,7 @@ class AnthropicProvider(ModelProvider):
         tools: list[dict] | None = None,
     ) -> ChatTurnResult:
         if not self.api_key:
-            raise ProviderError("Anthropic är inte konfigurerat ännu.")
+            raise ProviderError("Anthropic is not configured yet.")
 
         resolved_model = model or self.default_model
         system_text = "\n\n".join(
@@ -130,9 +130,9 @@ class AnthropicProvider(ModelProvider):
                 response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             detail = exc.response.text[:500]
-            raise ProviderError(f"Anthropic avvisade anropet: {detail}") from exc
+            raise ProviderError(f"Anthropic rejected the request: {detail}") from exc
         except httpx.HTTPError as exc:
-            raise ProviderError("Anthropic kunde inte nås.") from exc
+            raise ProviderError("Anthropic could not be reached.") from exc
 
         data = response.json()
         raw_usage = data.get("usage")
@@ -157,7 +157,7 @@ class AnthropicProvider(ModelProvider):
 
         content = "".join(block.get("text", "") for block in blocks if block.get("type") == "text")
         if not content.strip():
-            raise ProviderError("Anthropic returnerade inget textsvar.")
+            raise ProviderError("Anthropic returned no text response.")
 
         return ChatTurnResult(
             resolved_model=resolved_model,

@@ -15,7 +15,7 @@ def test_core_instructions_are_always_loaded() -> None:
         )
 
     assert context.included_files[:5] == ["AGENT.md", "instructions/safety.md", "instructions/work-rules.md", "instructions/communication-style.md", "instructions/memory-policy.md"]
-    assert "Du är SAMIDA" in context.system_message.content
+    assert "You are SAMIDA" in context.system_message.content
 
 
 def test_project_and_technical_memory_are_selected_for_unreal_request() -> None:

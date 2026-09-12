@@ -19,11 +19,11 @@ def _as_data_uri(raw_base64: str) -> str:
     try:
         payload = base64.b64decode(raw_base64, validate=True)
     except (ValueError, binascii.Error) as exc:
-        raise ProviderError("Bilden innehåller ogiltig base64-data.") from exc
+        raise ProviderError("The image contains invalid base64 data.") from exc
     for signature, mime_type in _IMAGE_SIGNATURES:
         if payload.startswith(signature):
             return f"data:{mime_type};base64,{raw_base64}"
-    raise ProviderError("Bildformatet kunde inte identifieras (stöder PNG/JPEG/WebP).")
+    raise ProviderError("Could not identify the image format (supports PNG/JPEG/WebP).")
 
 
 def _format_tools(specs: list[dict]) -> list[dict]:
@@ -58,7 +58,7 @@ class OpenAIProvider(ModelProvider):
         tools: list[dict] | None = None,
     ) -> ChatTurnResult:
         if not self.api_key:
-            raise ProviderError("OpenAI är inte konfigurerat ännu.")
+            raise ProviderError("OpenAI is not configured yet.")
 
         resolved_model = model or self.default_model
         payload = {
@@ -80,9 +80,9 @@ class OpenAIProvider(ModelProvider):
                 response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             detail = exc.response.text[:500]
-            raise ProviderError(f"OpenAI avvisade anropet: {detail}") from exc
+            raise ProviderError(f"OpenAI rejected the request: {detail}") from exc
         except httpx.HTTPError as exc:
-            raise ProviderError("OpenAI kunde inte nås.") from exc
+            raise ProviderError("OpenAI could not be reached.") from exc
 
         data = response.json()
         raw_usage = data.get("usage")
@@ -103,7 +103,7 @@ class OpenAIProvider(ModelProvider):
             try:
                 arguments = json.loads(function_call.get("arguments") or "{}")
             except json.JSONDecodeError as exc:
-                raise ProviderError("OpenAI returnerade ogiltiga verktygsargument.") from exc
+                raise ProviderError("OpenAI returned invalid tool arguments.") from exc
             tool_call = ToolCallRequest(
                 id=function_call["call_id"],
                 name=function_call["name"],
@@ -120,7 +120,7 @@ class OpenAIProvider(ModelProvider):
                 if item.get("type") == "output_text"
             )
         if not content.strip():
-            raise ProviderError("OpenAI returnerade inget textsvar.")
+            raise ProviderError("OpenAI returned no text response.")
 
         return ChatTurnResult(
             resolved_model=resolved_model,

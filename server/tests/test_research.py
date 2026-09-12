@@ -1,6 +1,7 @@
 import httpx
 import pytest
 
+from samida import auth
 from samida.camofox import CamoFoxClient
 from samida.config import Settings, get_settings
 from samida.dependencies import get_camofox_client, get_conversation_store, get_ollama_provider
@@ -9,6 +10,8 @@ from samida.providers.base import ChatTurnResult
 from samida.research import ResearchItem, parse_feed, run_research
 from samida.schemas import ChatMessage
 from samida.storage import ConversationStore
+
+TEST_USER = auth.User(id="test-user", email="test@example.com", tier="full")
 
 
 class FakeProvider:
@@ -68,6 +71,7 @@ def test_atom_feed_parser_prefers_alternate_over_earlier_comments_link() -> None
 @pytest.mark.asyncio
 async def test_research_api_injects_camofox_and_separates_report_types(tmp_path, monkeypatch) -> None:
     store = ConversationStore(tmp_path / "samida.db", tmp_path / "attachments")
+    user_id = store.create_user("test@example.com", "hash")["id"]
     camofox = CamoFoxClient("http://camofox.test")
     calls = []
 
@@ -80,6 +84,7 @@ async def test_research_api_injects_camofox_and_separates_report_types(tmp_path,
     app.dependency_overrides[get_ollama_provider] = lambda: FakeProvider()
     app.dependency_overrides[get_settings] = lambda: Settings()
     app.dependency_overrides[get_camofox_client] = lambda: camofox
+    app.dependency_overrides[auth.get_current_user] = lambda: auth.User(id=user_id, email="test@example.com", tier="full")
     try:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -99,10 +104,14 @@ async def test_research_api_injects_camofox_and_separates_report_types(tmp_path,
 
 @pytest.mark.asyncio
 async def test_research_api_rejects_unknown_type() -> None:
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        response = await client.post("/api/research/run?research_type=unknown")
+    app.dependency_overrides[auth.get_current_user] = lambda: TEST_USER
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post("/api/research/run?research_type=unknown")
+    finally:
+        app.dependency_overrides.clear()
 
     assert response.status_code == 422
 
@@ -110,6 +119,7 @@ async def test_research_api_rejects_unknown_type() -> None:
 @pytest.mark.asyncio
 async def test_research_api_reuses_idempotent_request(tmp_path, monkeypatch) -> None:
     store = ConversationStore(tmp_path / "samida.db", tmp_path / "attachments")
+    user_id = store.create_user("test@example.com", "hash")["id"]
     provider = FakeProvider()
     calls = 0
 
@@ -122,6 +132,7 @@ async def test_research_api_reuses_idempotent_request(tmp_path, monkeypatch) -> 
     app.dependency_overrides[get_conversation_store] = lambda: store
     app.dependency_overrides[get_ollama_provider] = lambda: provider
     app.dependency_overrides[get_settings] = lambda: Settings(camofox_enabled=False)
+    app.dependency_overrides[auth.get_current_user] = lambda: auth.User(id=user_id, email="test@example.com", tier="full")
     try:
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             first = await client.post("/api/research/run?research_type=mobile_apps", headers={"Idempotency-Key": "weekly-1"})

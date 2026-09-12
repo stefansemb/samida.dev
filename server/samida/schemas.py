@@ -3,6 +3,46 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 
+class RegisterRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=255)
+    password: str = Field(min_length=8, max_length=200)
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=255)
+    password: str = Field(min_length=1, max_length=200)
+
+
+class UserPublic(BaseModel):
+    id: str
+    email: str
+    tier: str
+
+
+class ProviderCredentialUpsert(BaseModel):
+    api_key: str = Field(min_length=1, max_length=2000)
+    base_url_override: str | None = Field(default=None, max_length=500)
+    default_model: str | None = Field(default=None, max_length=200)
+
+
+class ProviderCredentialPublic(BaseModel):
+    provider_key: str
+    configured: bool
+    base_url_override: str | None = None
+    default_model: str | None = None
+    updated_at: str | None = None
+
+
+class ModelCatalogEntry(BaseModel):
+    provider_key: str
+    model_name: str
+    display_name: str
+    supports_vision: bool
+    supports_tools: bool
+    requires_user_key: bool
+    usable: bool
+
+
 class ChatMessage(BaseModel):
     role: Literal["system", "user", "assistant", "tool"]
     content: str = ""
@@ -16,13 +56,13 @@ class ChatMessage(BaseModel):
         if self.tool_call_id:
             return self
         if not self.content.strip() and not self.images:
-            raise ValueError("Ett meddelande måste innehålla text eller en bild.")
+            raise ValueError("A message must contain text or an image.")
         return self
 
 
 class ChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(min_length=1)
-    provider: Literal["ollama", "openai", "anthropic"] = "ollama"
+    provider: str = "ollama"
     model: str | None = None
     profile: Literal["minimal", "samida-standard", "coding", "jarvis", "unreal"] = "minimal"
     working_directory: str | None = None
@@ -62,12 +102,10 @@ class HealthResponse(BaseModel):
     configured_vision_model: str
     vision_model_available: bool
     available_models: list[str] = Field(default_factory=list)
-    openai_configured: bool = False
-    anthropic_configured: bool = False
 
 
 class ConversationCreate(BaseModel):
-    title: str = Field(default="Ny chatt", min_length=1, max_length=120)
+    title: str = Field(default="New chat", min_length=1, max_length=120)
 
 
 class ConversationRename(BaseModel):
@@ -113,7 +151,7 @@ class ImageAttachment(BaseModel):
 class ConversationChatRequest(BaseModel):
     content: str = Field(default="", max_length=50_000)
     image: ImageAttachment | None = None
-    provider: Literal["ollama", "openai", "anthropic"] = "ollama"
+    provider: str = "ollama"
     model: str | None = None
     profile: Literal["minimal", "samida-standard", "coding", "jarvis", "unreal"] = "minimal"
     working_directory: str | None = None
@@ -121,7 +159,7 @@ class ConversationChatRequest(BaseModel):
     @model_validator(mode="after")
     def require_text_or_image(self) -> "ConversationChatRequest":
         if not self.content.strip() and self.image is None:
-            raise ValueError("Meddelandet måste innehålla text eller en bild.")
+            raise ValueError("The message must contain text or an image.")
         return self
 
 

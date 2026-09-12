@@ -36,6 +36,4 @@ async def test_health_reports_configured_model() -> None:
         "configured_vision_model": "qwen3-vl:8b",
         "vision_model_available": True,
         "available_models": ["gemma4:e4b", "qwen3-vl:8b"],
-        "openai_configured": False,
-        "anthropic_configured": False,
     }

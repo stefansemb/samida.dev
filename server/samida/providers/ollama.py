@@ -57,7 +57,7 @@ class OllamaProvider(ModelProvider):
                 response = await client.get(f"{self.base_url}/api/tags")
                 response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise ProviderError("Ollama kunde inte nås.") from exc
+            raise ProviderError("Ollama could not be reached.") from exc
 
         models = response.json().get("models", [])
         return [item["name"] for item in models if "name" in item]
@@ -88,9 +88,9 @@ class OllamaProvider(ModelProvider):
                 response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             detail = exc.response.text[:500]
-            raise ProviderError(f"Ollama avvisade anropet: {detail}") from exc
+            raise ProviderError(f"Ollama rejected the request: {detail}") from exc
         except httpx.HTTPError as exc:
-            raise ProviderError("Ollama kunde inte nås.") from exc
+            raise ProviderError("Ollama could not be reached.") from exc
 
         message = response.json().get("message", {})
         tool_calls = message.get("tool_calls")
@@ -105,7 +105,7 @@ class OllamaProvider(ModelProvider):
 
         content = message.get("content")
         if not isinstance(content, str) or not content.strip():
-            raise ProviderError("Ollama returnerade inget textsvar.")
+            raise ProviderError("Ollama returned no text response.")
 
         return ChatTurnResult(
             resolved_model=resolved_model,

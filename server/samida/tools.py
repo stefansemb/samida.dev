@@ -4,12 +4,33 @@ from pathlib import Path
 
 MAX_READ_BYTES = 200_000
 
-TOOL_SPECS: list[dict] = [
+GENERAL_TOOL_SPECS: list[dict] = [
+    {
+        "name": "generate_image",
+        "description": (
+            "Generate an image from a text description using the user's configured "
+            "image provider (GPT Image, Flux, or Gemini)."
+        ),
+        "risk": "low",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "Description of the image to generate.",
+                },
+            },
+            "required": ["prompt"],
+        },
+    },
+]
+
+WORKSPACE_TOOL_SPECS: list[dict] = [
     {
         "name": "list_directory",
         "description": (
-            "Lista filer och mappar i en katalog, relativt den aktiva arbetskatalogen. "
-            "Använd \".\" för att lista roten."
+            "List files and folders in a directory, relative to the active working directory. "
+            "Use \".\" to list the root."
         ),
         "risk": "low",
         "parameters": {
@@ -17,7 +38,7 @@ TOOL_SPECS: list[dict] = [
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Relativ sökväg inom arbetskatalogen. Standard är \".\".",
+                    "description": "Relative path within the working directory. Defaults to \".\".",
                 },
             },
             "required": [],
@@ -25,14 +46,14 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "read_file",
-        "description": "Läs textinnehållet i en fil, relativt den aktiva arbetskatalogen.",
+        "description": "Read the text content of a file, relative to the active working directory.",
         "risk": "low",
         "parameters": {
             "type": "object",
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Relativ sökväg till filen inom arbetskatalogen.",
+                    "description": "Relative path to the file within the working directory.",
                 },
             },
             "required": ["path"],
@@ -41,8 +62,8 @@ TOOL_SPECS: list[dict] = [
     {
         "name": "write_file",
         "description": (
-            "Skapa eller skriv över en textfil, relativt den aktiva arbetskatalogen. "
-            "Kräver användarens uttryckliga godkännande innan den faktiskt körs."
+            "Create or overwrite a text file, relative to the active working directory. "
+            "Requires the user's explicit approval before it actually runs."
         ),
         "risk": "medium",
         "parameters": {
@@ -50,17 +71,19 @@ TOOL_SPECS: list[dict] = [
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Relativ sökväg till filen inom arbetskatalogen.",
+                    "description": "Relative path to the file within the working directory.",
                 },
                 "content": {
                     "type": "string",
-                    "description": "Filens fullständiga textinnehåll.",
+                    "description": "The file's full text content.",
                 },
             },
             "required": ["path", "content"],
         },
     },
 ]
+
+TOOL_SPECS: list[dict] = GENERAL_TOOL_SPECS + WORKSPACE_TOOL_SPECS
 
 RISK_BY_TOOL: dict[str, str] = {spec["name"]: spec["risk"] for spec in TOOL_SPECS}
 
@@ -74,24 +97,24 @@ class WorkspaceError(RuntimeError):
 def resolve_in_workspace(workspace: Path, relative_path: str) -> Path:
     workspace = workspace.resolve()
     if workspace.parent == workspace:
-        raise WorkspaceError("Arbetskatalogen får inte vara en enhetsrot.")
+        raise WorkspaceError("The working directory cannot be a drive root.")
     if not workspace.is_dir():
-        raise WorkspaceError(f"Arbetskatalogen finns inte: {workspace}")
+        raise WorkspaceError(f"The working directory does not exist: {workspace}")
 
     relative_path = relative_path or "."
     if Path(relative_path).is_absolute():
-        raise WorkspaceError("Sökvägen måste vara relativ till arbetskatalogen.")
+        raise WorkspaceError("The path must be relative to the working directory.")
 
     candidate = (workspace / relative_path).resolve()
     if candidate != workspace and workspace not in candidate.parents:
-        raise WorkspaceError(f"Sökvägen ligger utanför arbetskatalogen: {relative_path}")
+        raise WorkspaceError(f"The path is outside the working directory: {relative_path}")
     return candidate
 
 
 def list_directory(workspace: Path, relative_path: str = ".") -> dict:
     target = resolve_in_workspace(workspace, relative_path)
     if not target.is_dir():
-        raise WorkspaceError(f"Katalogen finns inte: {relative_path}")
+        raise WorkspaceError(f"The directory does not exist: {relative_path}")
     entries = []
     for child in sorted(target.iterdir(), key=lambda p: p.name.lower()):
         if child.name.startswith(".") or child.name in _SKIP_NAMES:
@@ -109,14 +132,14 @@ def list_directory(workspace: Path, relative_path: str = ".") -> dict:
 def read_file(workspace: Path, relative_path: str) -> dict:
     target = resolve_in_workspace(workspace, relative_path)
     if not target.is_file():
-        raise WorkspaceError(f"Filen finns inte: {relative_path}")
+        raise WorkspaceError(f"The file does not exist: {relative_path}")
     size = target.stat().st_size
     if size > MAX_READ_BYTES:
-        raise WorkspaceError(f"Filen är för stor för att läsas ({size} bytes, max {MAX_READ_BYTES}).")
+        raise WorkspaceError(f"The file is too large to read ({size} bytes, max {MAX_READ_BYTES}).")
     try:
         content = target.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
-        raise WorkspaceError("Filen verkar vara binär eller har okänd textkodning.") from exc
+        raise WorkspaceError("The file appears to be binary or has an unknown text encoding.") from exc
     return {"path": relative_path, "content": content}
 
 

@@ -13,3 +13,4 @@ data/*
 !data/.gitkeep
 conversations/*
 !conversations/.gitkeep
+.claude/

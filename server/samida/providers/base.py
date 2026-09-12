@@ -8,6 +8,12 @@ class ProviderError(RuntimeError):
     """A safe, provider-level failure suitable for API error handling."""
 
 
+class ProviderNotConfiguredError(ProviderError):
+    """Raised when the caller hasn't set up the requested provider (e.g. no
+    API key on file yet) — a client-side configuration issue, not an
+    upstream/provider failure."""
+
+
 @dataclass
 class ToolCallRequest:
     id: str

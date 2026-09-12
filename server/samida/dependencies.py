@@ -1,10 +1,12 @@
 from functools import lru_cache
 
-from samida.config import get_settings
+from samida.config import Settings, get_settings
 from samida.context import ContextBuilder
 from samida.camofox import CamoFoxClient
+from samida.crypto import decrypt_secret
 from samida.ocr import OcrService
-from samida.providers import AnthropicProvider, OllamaProvider, OpenAIProvider
+from samida.providers import ImageProvider, ModelProvider, OllamaProvider, ProviderNotConfiguredError
+from samida.providers.registry import CHAT_PROVIDER_SPECS, IMAGE_PROVIDER_PREFERENCE, IMAGE_PROVIDER_SPECS
 from samida.storage import ConversationStore
 
 
@@ -18,26 +20,91 @@ def get_ollama_provider() -> OllamaProvider:
     )
 
 
-@lru_cache
-def get_openai_provider() -> OpenAIProvider:
-    settings = get_settings()
-    return OpenAIProvider(
-        api_key=settings.openai_api_key,
-        base_url=settings.openai_base_url,
-        default_model=settings.openai_model,
-        timeout=settings.request_timeout_seconds,
-    )
+class ChatProviderFactory:
+    """Builds a fresh chat provider per request, using the calling user's own
+    stored (and decrypted) API key — providers hold a secret in memory, so
+    they must never be cached/shared across users."""
+
+    def __init__(self, user_id: str, store: ConversationStore, settings: Settings) -> None:
+        self._user_id = user_id
+        self._store = store
+        self._settings = settings
+
+    async def build(self, provider_key: str, requested_model: str | None) -> tuple[ModelProvider, str]:
+        if provider_key == "ollama":
+            provider = OllamaProvider(
+                base_url=self._settings.ollama_base_url,
+                default_model=self._settings.ollama_chat_model,
+                timeout=self._settings.request_timeout_seconds,
+            )
+            return provider, requested_model or self._settings.ollama_chat_model
+
+        spec = CHAT_PROVIDER_SPECS.get(provider_key)
+        if spec is None:
+            raise ProviderNotConfiguredError(f"Unknown provider: {provider_key}.")
+        credential = self._store.get_provider_credential(self._user_id, "chat", provider_key)
+        if credential is None:
+            raise ProviderNotConfiguredError(
+                f"You haven't added an API key for {provider_key} under Settings."
+            )
+        api_key = decrypt_secret(credential["api_key_encrypted"], self._settings)
+        default_model = credential["default_model"] or spec.default_model
+        provider = spec.provider_class(
+            api_key=api_key,
+            base_url=credential["base_url_override"] or spec.default_base_url,
+            default_model=default_model,
+            timeout=self._settings.request_timeout_seconds,
+        )
+        return provider, requested_model or default_model
 
 
-@lru_cache
-def get_anthropic_provider() -> AnthropicProvider:
-    settings = get_settings()
-    return AnthropicProvider(
-        api_key=settings.anthropic_api_key,
-        base_url=settings.anthropic_base_url,
-        default_model=settings.anthropic_model,
-        timeout=settings.request_timeout_seconds,
-    )
+class ImageProviderFactory:
+    """Builds the calling user's configured image-generation provider. Falls
+    back to Pollinations.ai (free, keyless) when the user hasn't configured
+    any of the paid providers, so generate_image always works."""
+
+    def __init__(self, user_id: str, store: ConversationStore, settings: Settings) -> None:
+        self._user_id = user_id
+        self._store = store
+        self._settings = settings
+
+    async def build(self, provider_key: str) -> ImageProvider:
+        spec = IMAGE_PROVIDER_SPECS.get(provider_key)
+        if spec is None:
+            raise ProviderNotConfiguredError(f"Unknown image provider: {provider_key}.")
+        credential = self._store.get_provider_credential(self._user_id, "image", provider_key)
+        if credential is None:
+            if provider_key == "pollinations":
+                # Free and keyless — works anonymously (with a watermark) if
+                # the user hasn't optionally added their own free token.
+                return spec.provider_class(
+                    api_key=None,
+                    base_url=spec.default_base_url,
+                    default_model=spec.default_model,
+                    timeout=self._settings.request_timeout_seconds,
+                )
+            raise ProviderNotConfiguredError(
+                f"You haven't added an API key for {provider_key} under Settings."
+            )
+        api_key = decrypt_secret(credential["api_key_encrypted"], self._settings)
+        return spec.provider_class(
+            api_key=api_key,
+            base_url=credential["base_url_override"] or spec.default_base_url,
+            default_model=credential["default_model"] or spec.default_model,
+            timeout=self._settings.request_timeout_seconds,
+        )
+
+    async def build_default(self) -> tuple[ImageProvider, str]:
+        """Return the user's first configured image provider, in a fixed
+        preference order, since the generate_image tool takes no provider
+        argument. Falls back to Pollinations.ai (free; keyless unless the
+        user optionally added their own free token) if the user hasn't
+        configured any paid provider."""
+        for provider_key in IMAGE_PROVIDER_PREFERENCE:
+            credential = self._store.get_provider_credential(self._user_id, "image", provider_key)
+            if credential is not None:
+                return await self.build(provider_key), provider_key
+        return await self.build("pollinations"), "pollinations"
 
 
 @lru_cache

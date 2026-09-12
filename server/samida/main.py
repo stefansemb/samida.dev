@@ -2,22 +2,24 @@ import asyncio
 from pathlib import Path
 from typing import Literal
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from samida import agent, tools as tool_impl
+from samida import agent, auth, tools as tool_impl
 from samida.config import Settings, get_settings
 from samida.context import ContextBuilder, ContextError
+from samida.crypto import CryptoError, encrypt_secret
 from samida.dependencies import (
-    get_anthropic_provider,
+    ChatProviderFactory,
+    ImageProviderFactory,
     get_context_builder,
     get_conversation_store,
     get_ocr_service,
-    get_openai_provider,
     get_ollama_provider,
 )
-from samida.providers import AnthropicProvider, ModelProvider, OllamaProvider, OpenAIProvider, ProviderError, ToolCallRequest
+from samida.providers import ModelProvider, OllamaProvider, ProviderError, ProviderNotConfiguredError, ToolCallRequest
+from samida.providers.registry import CHAT_PROVIDER_SPECS, IMAGE_PROVIDER_SPECS
 from samida.ocr import OcrService
 from samida.research import run_research
 from samida.camofox import CamoFoxClient
@@ -35,14 +37,36 @@ from samida.schemas import (
     ConversationRename,
     ConversationSummary,
     HealthResponse,
+    ModelCatalogEntry,
     PendingToolCall,
+    ProviderCredentialPublic,
+    ProviderCredentialUpsert,
     StoredMessage,
     ResearchReport,
     Reminder, ReminderCreate,
     ToolCallDecisionResponse,
+    UserPublic,
+    LoginRequest,
+    RegisterRequest,
     WorkspacePickResponse,
 )
 from samida.storage import ConversationStore, NotFoundError, StorageError
+
+
+def get_chat_provider_factory(
+    user: auth.User = Depends(auth.get_current_user),
+    store: ConversationStore = Depends(get_conversation_store),
+    settings: Settings = Depends(get_settings),
+) -> ChatProviderFactory:
+    return ChatProviderFactory(user.id, store, settings)
+
+
+def get_image_provider_factory(
+    user: auth.User = Depends(auth.get_current_user),
+    store: ConversationStore = Depends(get_conversation_store),
+    settings: Settings = Depends(get_settings),
+) -> ImageProviderFactory:
+    return ImageProviderFactory(user.id, store, settings)
 
 app = FastAPI(
     title="SAMIDA API",
@@ -60,13 +84,13 @@ app.add_middleware(
         "http://localhost:5173",
         *get_settings().resolved_cors_origins(),
     ],
-    allow_credentials=False,
-    allow_methods=["GET", "POST", "PATCH", "DELETE"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["Content-Type"],
 )
 
 @app.post("/api/workspace/pick", response_model=WorkspacePickResponse)
-def pick_workspace() -> WorkspacePickResponse:
+def pick_workspace(user: auth.User = Depends(auth.get_current_user)) -> WorkspacePickResponse:
     """Open a local native folder picker. Desktop-only; unavailable on a headless server."""
     try:
         import tkinter as tk
@@ -74,39 +98,182 @@ def pick_workspace() -> WorkspacePickResponse:
     except ImportError as exc:
         raise HTTPException(
             status_code=501,
-            detail="Mappväljaren är bara tillgänglig på en desktop-installation av SAMIDA.",
+            detail="The folder picker is only available on a desktop installation of SAMIDA.",
         ) from exc
     root = tk.Tk()
     root.withdraw()
     root.attributes("-topmost", True)
     try:
-        path = filedialog.askdirectory(title="Välj arbetskatalog") or None
+        path = filedialog.askdirectory(title="Choose working directory") or None
     finally:
         root.destroy()
     return WorkspacePickResponse(path=path)
 
 
-def pick_provider(
-    name: str,
-    ollama: OllamaProvider,
-    openai: OpenAIProvider,
-    anthropic: AnthropicProvider,
-) -> ModelProvider:
-    if name == "openai":
-        return openai
-    if name == "anthropic":
-        return anthropic
-    return ollama
+@app.post("/api/auth/register", response_model=UserPublic, status_code=201)
+def register(
+    request: RegisterRequest,
+    response: Response,
+    store: ConversationStore = Depends(get_conversation_store),
+    settings: Settings = Depends(get_settings),
+) -> UserPublic:
+    email = request.email.strip().lower()
+    if "@" not in email:
+        raise HTTPException(status_code=400, detail="Please enter a valid email address.")
+    if store.get_user_by_email(email) is not None:
+        raise HTTPException(status_code=409, detail="This email address is already in use.")
+    user = store.create_user(email, auth.hash_password(request.password))
+    raw_token, expires_at = auth.issue_session(store, user["id"])
+    auth.set_session_cookie(response, raw_token, expires_at, secure=settings.cookie_secure)
+    return UserPublic(id=user["id"], email=user["email"], tier=user["tier"])
+
+
+@app.post("/api/auth/login", response_model=UserPublic)
+def login(
+    request: LoginRequest,
+    response: Response,
+    store: ConversationStore = Depends(get_conversation_store),
+    settings: Settings = Depends(get_settings),
+) -> UserPublic:
+    email = request.email.strip().lower()
+    user = store.get_user_by_email(email)
+    if user is None or not auth.verify_password(request.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Incorrect email or password.")
+    raw_token, expires_at = auth.issue_session(store, user["id"])
+    auth.set_session_cookie(response, raw_token, expires_at, secure=settings.cookie_secure)
+    return UserPublic(id=user["id"], email=user["email"], tier=user["tier"])
+
+
+@app.post("/api/auth/logout", status_code=204)
+def logout(
+    request: Request,
+    response: Response,
+    store: ConversationStore = Depends(get_conversation_store),
+) -> None:
+    raw_token = request.cookies.get(auth.SESSION_COOKIE_NAME)
+    if raw_token:
+        store.delete_session(auth.hash_token(raw_token))
+    auth.clear_session_cookie(response)
+
+
+@app.get("/api/auth/me", response_model=UserPublic)
+def me(user: auth.User = Depends(auth.get_current_user)) -> UserPublic:
+    return UserPublic(id=user.id, email=user.email, tier=user.tier)
+
+
+@app.get("/api/settings/providers", response_model=list[ProviderCredentialPublic])
+def list_provider_credentials(
+    kind: Literal["chat", "image"] = "chat",
+    store: ConversationStore = Depends(get_conversation_store),
+    user: auth.User = Depends(auth.get_current_user),
+) -> list[ProviderCredentialPublic]:
+    rows = store.list_provider_credentials(user.id, kind)
+    configured = {row["provider_key"]: row for row in rows}
+    provider_keys = (CHAT_PROVIDER_SPECS if kind == "chat" else IMAGE_PROVIDER_SPECS).keys()
+    return [
+        ProviderCredentialPublic(
+            provider_key=key,
+            configured=key in configured,
+            base_url_override=configured[key]["base_url_override"] if key in configured else None,
+            default_model=configured[key]["default_model"] if key in configured else None,
+            updated_at=configured[key]["updated_at"] if key in configured else None,
+        )
+        for key in provider_keys
+    ]
+
+
+@app.put("/api/settings/providers/{provider_key}", response_model=ProviderCredentialPublic)
+def upsert_provider_credential(
+    provider_key: str,
+    request: ProviderCredentialUpsert,
+    kind: Literal["chat", "image"] = "chat",
+    store: ConversationStore = Depends(get_conversation_store),
+    settings: Settings = Depends(get_settings),
+    user: auth.User = Depends(auth.get_current_user),
+) -> ProviderCredentialPublic:
+    valid_keys = CHAT_PROVIDER_SPECS if kind == "chat" else IMAGE_PROVIDER_SPECS
+    if provider_key not in valid_keys:
+        raise HTTPException(status_code=404, detail=f"Unknown provider: {provider_key}.")
+    try:
+        encrypted = encrypt_secret(request.api_key, settings)
+    except CryptoError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    row = store.upsert_provider_credential(
+        user.id, kind, provider_key, encrypted, request.base_url_override, request.default_model,
+    )
+    return ProviderCredentialPublic(
+        provider_key=row["provider_key"],
+        configured=True,
+        base_url_override=row["base_url_override"],
+        default_model=row["default_model"],
+        updated_at=row["updated_at"],
+    )
+
+
+@app.delete("/api/settings/providers/{provider_key}", status_code=204)
+def delete_provider_credential(
+    provider_key: str,
+    kind: Literal["chat", "image"] = "chat",
+    store: ConversationStore = Depends(get_conversation_store),
+    user: auth.User = Depends(auth.get_current_user),
+) -> None:
+    try:
+        store.delete_provider_credential(user.id, kind, provider_key)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/models/catalog", response_model=list[ModelCatalogEntry])
+async def list_model_catalog(
+    kind: Literal["chat", "image"] = "chat",
+    store: ConversationStore = Depends(get_conversation_store),
+    ollama: OllamaProvider = Depends(get_ollama_provider),
+    user: auth.User = Depends(auth.get_current_user),
+) -> list[ModelCatalogEntry]:
+    configured_keys = {row["provider_key"] for row in store.list_provider_credentials(user.id, kind)}
+    entries = [
+        ModelCatalogEntry(
+            provider_key=row["provider_key"],
+            model_name=row["model_name"],
+            display_name=row["display_name"],
+            supports_vision=bool(row["supports_vision"]),
+            supports_tools=bool(row["supports_tools"]),
+            requires_user_key=bool(row["requires_user_key"]),
+            usable=not row["requires_user_key"] or row["provider_key"] in configured_keys,
+        )
+        for row in store.list_model_catalog(kind)
+    ]
+    if kind == "chat":
+        try:
+            ollama_models = await ollama.model_names()
+        except ProviderError:
+            ollama_models = []
+        for name in ollama_models:
+            normalized = name.lower()
+            if "cloud" in normalized or normalized.startswith("bge-"):
+                continue
+            entries.append(
+                ModelCatalogEntry(
+                    provider_key="ollama",
+                    model_name=name,
+                    display_name=name,
+                    supports_vision=False,
+                    supports_tools=True,
+                    requires_user_key=False,
+                    usable=True,
+                )
+            )
+    return entries
 
 
 def runtime_message(provider: ModelProvider, model: str) -> ChatMessage:
     return ChatMessage(
         role="system",
         content=(
-            "Intern runtime-information: detta svar genereras av "
-            f"provider '{provider.name}' med modell '{model}'. "
-            "Om användaren frågar vilken modell som används, ange dessa "
-            "värden exakt och gissa inte."
+            "Internal runtime information: this response is generated by "
+            f"provider '{provider.name}' with model '{model}'. "
+            "If the user asks which model is being used, state these "
+            "values exactly and do not guess."
         ),
     )
 
@@ -127,8 +294,6 @@ async def health(
             configured_vision_model=settings.ollama_vision_model,
             vision_model_available=False,
             available_models=[],
-            openai_configured=settings.openai_api_key is not None,
-            anthropic_configured=settings.anthropic_api_key is not None,
         )
 
     available = settings.ollama_chat_model in models
@@ -141,8 +306,6 @@ async def health(
         configured_vision_model=settings.ollama_vision_model,
         vision_model_available=vision_available,
         available_models=models,
-        openai_configured=settings.openai_api_key is not None,
-        anthropic_configured=settings.anthropic_api_key is not None,
     )
 
 
@@ -150,26 +313,25 @@ async def health(
 async def chat(
     request: ChatRequest,
     settings: Settings = Depends(get_settings),
-    ollama: OllamaProvider = Depends(get_ollama_provider),
-    openai: OpenAIProvider = Depends(get_openai_provider),
-    anthropic: AnthropicProvider = Depends(get_anthropic_provider),
     context_builder: ContextBuilder = Depends(get_context_builder),
+    factory: ChatProviderFactory = Depends(get_chat_provider_factory),
 ) -> ChatResponse:
     try:
         context = context_builder.build(request.messages, request.profile, request.working_directory)
-        provider: ModelProvider = pick_provider(request.provider, ollama, openai, anthropic)
         selected_model = request.model
         if selected_model is None and any(message.images for message in request.messages):
             selected_model = settings.ollama_vision_model
-        resolved_model = selected_model or settings.ollama_chat_model
+        provider, resolved_model = await factory.build(request.provider, selected_model)
         turn = await provider.chat(
             [context.system_message, runtime_message(provider, resolved_model), *request.messages],
-            selected_model,
+            resolved_model,
         )
         if turn.message is None:
-            raise ProviderError("Modellen försökte anropa ett verktyg, vilket inte stöds här.")
+            raise ProviderError("The model attempted to call a tool, which is not supported here.")
     except ContextError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except ProviderNotConfiguredError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ProviderError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -186,6 +348,7 @@ async def chat(
 async def preview_context(
     request: ContextPreviewRequest,
     context_builder: ContextBuilder = Depends(get_context_builder),
+    user: auth.User = Depends(auth.get_current_user),
 ) -> ContextPreviewResponse:
     try:
         context = context_builder.build(request.messages)
@@ -200,37 +363,63 @@ async def preview_context(
 @app.get("/api/conversations", response_model=list[ConversationSummary])
 def list_conversations(
     store: ConversationStore = Depends(get_conversation_store),
+    user: auth.User = Depends(auth.get_current_user),
 ) -> list[dict]:
-    return store.list_conversations()
+    return store.list_conversations(user.id)
 
 
 @app.get("/api/research/reports", response_model=list[ResearchReport])
 def list_research_reports(
     research_type: Literal["ai_general", "mobile_apps"] = "ai_general",
     store: ConversationStore = Depends(get_conversation_store),
+    user: auth.User = Depends(auth.get_current_user),
 ) -> list[dict]:
-    return store.list_research_reports(research_type)
+    return store.list_research_reports(user.id, research_type)
 
 @app.get("/api/reminders", response_model=list[Reminder])
-def list_reminders(store: ConversationStore = Depends(get_conversation_store)) -> list[dict]:
-    return store.list_reminders()
+def list_reminders(
+    store: ConversationStore = Depends(get_conversation_store),
+    user: auth.User = Depends(auth.get_current_user),
+) -> list[dict]:
+    return store.list_reminders(user.id)
 
 @app.get("/api/priorities")
-def get_priorities(settings: Settings = Depends(get_settings)) -> dict[str, str]:
+def get_priorities(
+    settings: Settings = Depends(get_settings),
+    user: auth.User = Depends(auth.get_current_user),
+) -> dict[str, str]:
     path = settings.project_root / "memory" / "priorities.md"
     return {"content": path.read_text(encoding="utf-8") if path.exists() else ""}
 
 @app.post("/api/reminders", response_model=Reminder, status_code=201)
-def create_reminder(request: ReminderCreate, store: ConversationStore = Depends(get_conversation_store)) -> dict:
-    return store.create_reminder(request.text, request.due_at, request.recurrence, request.range_start, request.range_end, request.event_at)
+def create_reminder(
+    request: ReminderCreate,
+    store: ConversationStore = Depends(get_conversation_store),
+    user: auth.User = Depends(auth.get_current_user),
+) -> dict:
+    return store.create_reminder(user.id, request.text, request.due_at, request.recurrence, request.range_start, request.range_end, request.event_at)
 
 @app.post("/api/reminders/{reminder_id}/complete", status_code=204)
-def complete_reminder(reminder_id: str, store: ConversationStore = Depends(get_conversation_store)) -> None:
-    store.complete_reminder(reminder_id)
+def complete_reminder(
+    reminder_id: str,
+    store: ConversationStore = Depends(get_conversation_store),
+    user: auth.User = Depends(auth.get_current_user),
+) -> None:
+    try:
+        store.complete_reminder(reminder_id, user.id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 @app.delete("/api/reminders/{reminder_id}", status_code=204)
-def delete_reminder(reminder_id: str, store: ConversationStore = Depends(get_conversation_store)) -> None:
-    store.delete_reminder(reminder_id)
+def delete_reminder(
+    reminder_id: str,
+    store: ConversationStore = Depends(get_conversation_store),
+    user: auth.User = Depends(auth.get_current_user),
+) -> None:
+    try:
+        store.delete_reminder(reminder_id, user.id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post("/api/research/run", response_model=ResearchReport, status_code=201)
@@ -241,14 +430,15 @@ async def create_research_report(
     store: ConversationStore = Depends(get_conversation_store),
     camofox: CamoFoxClient | None = Depends(get_camofox_client),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", max_length=200),
+    user: auth.User = Depends(auth.get_current_user),
 ) -> dict:
     if idempotency_key:
-        existing = store.get_research_report_by_idempotency_key(idempotency_key)
+        existing = store.get_research_report_by_idempotency_key(user.id, idempotency_key)
         if existing:
             return existing
     try:
         content, sources = await run_research(ollama, settings.ollama_chat_model, research_type, camofox)
-        return store.create_research_report(content, sources, research_type, idempotency_key)
+        return store.create_research_report(user.id, content, sources, research_type, idempotency_key)
     except ProviderError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -257,18 +447,20 @@ async def create_research_report(
 def create_conversation(
     request: ConversationCreate,
     store: ConversationStore = Depends(get_conversation_store),
+    user: auth.User = Depends(auth.get_current_user),
 ) -> dict:
-    return store.create_conversation(request.title)
+    return store.create_conversation(user.id, request.title)
 
 
 @app.get("/api/conversations/{conversation_id}", response_model=ConversationDetail)
 def get_conversation(
     conversation_id: str,
     store: ConversationStore = Depends(get_conversation_store),
+    user: auth.User = Depends(auth.get_current_user),
 ) -> dict:
     try:
-        conversation = store.get_conversation(conversation_id)
-        return {**conversation, "messages": store.messages(conversation_id)}
+        conversation = store.get_conversation(conversation_id, user.id)
+        return {**conversation, "messages": store.messages(conversation_id, user.id)}
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -278,9 +470,10 @@ def rename_conversation(
     conversation_id: str,
     request: ConversationRename,
     store: ConversationStore = Depends(get_conversation_store),
+    user: auth.User = Depends(auth.get_current_user),
 ) -> dict:
     try:
-        return store.rename_conversation(conversation_id, request.title)
+        return store.rename_conversation(conversation_id, user.id, request.title)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -289,9 +482,10 @@ def rename_conversation(
 def delete_conversation(
     conversation_id: str,
     store: ConversationStore = Depends(get_conversation_store),
+    user: auth.User = Depends(auth.get_current_user),
 ) -> None:
     try:
-        store.delete_conversation(conversation_id)
+        store.delete_conversation(conversation_id, user.id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -303,19 +497,19 @@ def delete_conversation(
 async def conversation_chat(
     conversation_id: str,
     request: ConversationChatRequest,
-    ollama: OllamaProvider = Depends(get_ollama_provider),
-    openai: OpenAIProvider = Depends(get_openai_provider),
-    anthropic: AnthropicProvider = Depends(get_anthropic_provider),
+    factory: ChatProviderFactory = Depends(get_chat_provider_factory),
+    image_factory: ImageProviderFactory = Depends(get_image_provider_factory),
     context_builder: ContextBuilder = Depends(get_context_builder),
     store: ConversationStore = Depends(get_conversation_store),
     ocr: OcrService = Depends(get_ocr_service),
     settings: Settings = Depends(get_settings),
+    user: auth.User = Depends(auth.get_current_user),
 ) -> ConversationChatResponse:
     image_filename = None
     image_base64 = None
     ocr_text = None
     try:
-        store.get_conversation(conversation_id)
+        store.get_conversation(conversation_id, user.id)
         if request.image:
             image_filename, image_base64 = store.save_image(request.image)
             ocr_text = await asyncio.to_thread(
@@ -324,20 +518,20 @@ async def conversation_chat(
             )
         history = [
             StoredMessage.model_validate(message)
-            for message in store.messages(conversation_id)
+            for message in store.messages(conversation_id, user.id)
         ]
         context_messages = [
             ChatMessage(
                 role=message.role,
-                content=message.content or "[Skärmdump]",
+                content=message.content or "[Screenshot]",
             )
             for message in history
         ]
-        current_content = request.content.strip() or "Beskriv och analysera bilden."
+        current_content = request.content.strip() or "Describe and analyze the image."
         if ocr_text:
             current_content += (
-                "\n\nLokalt OCR-verktyg läste följande text ur bilden. "
-                "Använd den som stöd och kontrollera den mot bilden:\n---\n"
+                "\n\nA local OCR tool read the following text from the image. "
+                "Use it as a reference and cross-check it against the image:\n---\n"
                 f"{ocr_text}\n---"
             )
         current = ChatMessage(
@@ -348,17 +542,20 @@ async def conversation_chat(
         context = context_builder.build([*context_messages, current], request.profile, request.working_directory)
         model_history = [
             ChatMessage.model_validate(message)
-            for message in store.model_messages(conversation_id)
+            for message in store.model_messages(conversation_id, user.id)
         ]
-        provider: ModelProvider = pick_provider(request.provider, ollama, openai, anthropic)
         selected_model = request.model
         if image_base64 and request.provider == "ollama":
             selected_model = settings.ollama_vision_model
-        resolved_model = selected_model or settings.ollama_chat_model
+        provider, resolved_model = await factory.build(request.provider, selected_model)
         workspace = _resolve_workspace(request.working_directory)
+        image_provider, image_provider_key = await image_factory.build_default()
+        image_context = agent.ImageToolContext(
+            image_provider=image_provider, provider_key=image_provider_key, store=store
+        )
         turn = await agent.run_turn(
             provider,
-            selected_model,
+            resolved_model,
             [
                 context.system_message,
                 runtime_message(provider, resolved_model),
@@ -367,6 +564,7 @@ async def conversation_chat(
             ],
             workspace=workspace,
             logs_dir=settings.resolved_logs_dir(),
+            image_context=image_context,
         )
 
         pending_tool_call: PendingToolCall | None = None
@@ -375,6 +573,7 @@ async def conversation_chat(
             risk = tool_impl.RISK_BY_TOOL.get(call.name, "medium")
             record = store.create_pending_tool_call(
                 conversation_id,
+                user.id,
                 call.id,
                 call.name,
                 call.arguments,
@@ -386,11 +585,13 @@ async def conversation_chat(
             )
             conversation, user_message, assistant_message = store.add_exchange(
                 conversation_id,
+                user.id,
                 request.content.strip(),
                 _tool_proposal_text(call),
                 image_filename,
                 ocr_text,
                 assistant_tool_call_id=call.id,
+                assistant_image_filename=turn.image_filename,
             )
             pending_tool_call = PendingToolCall(
                 id=record["id"],
@@ -403,16 +604,22 @@ async def conversation_chat(
         else:
             conversation, user_message, assistant_message = store.add_exchange(
                 conversation_id,
+                user.id,
                 request.content.strip(),
                 turn.message.content,
                 image_filename,
                 ocr_text,
+                assistant_image_filename=turn.image_filename,
             )
     except NotFoundError as exc:
         if image_filename:
             store.attachment_path(image_filename).unlink(missing_ok=True)
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (StorageError, ContextError) as exc:
+        if image_filename:
+            store.attachment_path(image_filename).unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ProviderNotConfiguredError as exc:
         if image_filename:
             store.attachment_path(image_filename).unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -446,8 +653,8 @@ def _tool_proposal_text(call: ToolCallRequest) -> str:
         path = call.arguments.get("path", "?")
         content = call.arguments.get("content", "")
         lines = content.count("\n") + 1 if content else 0
-        return f'Föreslår att skriva till "{path}" ({lines} rader). Väntar på ditt godkännande.'
-    return f"Föreslår att köra verktyget {call.name}. Väntar på ditt godkännande."
+        return f'Proposing to write to "{path}" ({lines} lines). Waiting for your approval.'
+    return f"Proposing to run the tool {call.name}. Waiting for your approval."
 
 
 @app.post(
@@ -457,23 +664,23 @@ def _tool_proposal_text(call: ToolCallRequest) -> str:
 async def approve_tool_call(
     conversation_id: str,
     tool_call_id: str,
-    ollama: OllamaProvider = Depends(get_ollama_provider),
-    openai: OpenAIProvider = Depends(get_openai_provider),
-    anthropic: AnthropicProvider = Depends(get_anthropic_provider),
+    factory: ChatProviderFactory = Depends(get_chat_provider_factory),
+    image_factory: ImageProviderFactory = Depends(get_image_provider_factory),
     context_builder: ContextBuilder = Depends(get_context_builder),
     store: ConversationStore = Depends(get_conversation_store),
     settings: Settings = Depends(get_settings),
+    user: auth.User = Depends(auth.get_current_user),
 ) -> ToolCallDecisionResponse:
     return await _resolve_tool_call(
         conversation_id,
         tool_call_id,
         approve=True,
-        ollama=ollama,
-        openai=openai,
-        anthropic=anthropic,
+        factory=factory,
+        image_factory=image_factory,
         context_builder=context_builder,
         store=store,
         settings=settings,
+        owner_id=user.id,
     )
 
 
@@ -484,23 +691,23 @@ async def approve_tool_call(
 async def reject_tool_call(
     conversation_id: str,
     tool_call_id: str,
-    ollama: OllamaProvider = Depends(get_ollama_provider),
-    openai: OpenAIProvider = Depends(get_openai_provider),
-    anthropic: AnthropicProvider = Depends(get_anthropic_provider),
+    factory: ChatProviderFactory = Depends(get_chat_provider_factory),
+    image_factory: ImageProviderFactory = Depends(get_image_provider_factory),
     context_builder: ContextBuilder = Depends(get_context_builder),
     store: ConversationStore = Depends(get_conversation_store),
     settings: Settings = Depends(get_settings),
+    user: auth.User = Depends(auth.get_current_user),
 ) -> ToolCallDecisionResponse:
     return await _resolve_tool_call(
         conversation_id,
         tool_call_id,
         approve=False,
-        ollama=ollama,
-        openai=openai,
-        anthropic=anthropic,
+        factory=factory,
+        image_factory=image_factory,
         context_builder=context_builder,
         store=store,
         settings=settings,
+        owner_id=user.id,
     )
 
 
@@ -509,19 +716,19 @@ async def _resolve_tool_call(
     tool_call_id: str,
     *,
     approve: bool,
-    ollama: OllamaProvider,
-    openai: OpenAIProvider,
-    anthropic: AnthropicProvider,
+    factory: ChatProviderFactory,
+    image_factory: ImageProviderFactory,
     context_builder: ContextBuilder,
     store: ConversationStore,
     settings: Settings,
+    owner_id: str,
 ) -> ToolCallDecisionResponse:
     try:
-        record = store.get_tool_call(tool_call_id)
+        record = store.get_tool_call(tool_call_id, owner_id)
         if record["conversation_id"] != conversation_id:
-            raise NotFoundError("Verktygsanropet hör inte till denna chatt.")
+            raise NotFoundError("The tool call does not belong to this chat.")
         if record["status"] != "pending":
-            raise StorageError("Verktygsanropet är redan hanterat.")
+            raise StorageError("The tool call has already been resolved.")
 
         call = ToolCallRequest(id=record["id"], name=record["tool_name"], arguments=record["arguments"])
         workspace = _resolve_workspace(record["working_directory"])
@@ -535,7 +742,7 @@ async def _resolve_tool_call(
                 outcome = {"error": str(exc)}
                 status = "failed"
         else:
-            outcome = {"status": "rejected", "message": "Användaren avvisade åtgärden."}
+            outcome = {"status": "rejected", "message": "The user rejected the action."}
             status = "rejected"
         tool_impl.log_tool_call(
             settings.resolved_logs_dir(),
@@ -545,13 +752,17 @@ async def _resolve_tool_call(
             status=status,
             detail=str(outcome),
         )
-        store.resolve_tool_call(tool_call_id, status=status, result=outcome)
+        store.resolve_tool_call(tool_call_id, owner_id, status=status, result=outcome)
 
-        history = [StoredMessage.model_validate(item) for item in store.messages(conversation_id)]
-        context_messages = [ChatMessage(role=item.role, content=item.content or "[Skärmdump]") for item in history]
+        history = [StoredMessage.model_validate(item) for item in store.messages(conversation_id, owner_id)]
+        context_messages = [ChatMessage(role=item.role, content=item.content or "[Screenshot]") for item in history]
         context = context_builder.build(context_messages, record["profile"], record["working_directory"])
-        model_history = [ChatMessage.model_validate(item) for item in store.model_messages(conversation_id)]
-        provider: ModelProvider = pick_provider(record["provider"], ollama, openai, anthropic)
+        model_history = [ChatMessage.model_validate(item) for item in store.model_messages(conversation_id, owner_id)]
+        provider, _resolved = await factory.build(record["provider"], record["model"])
+        image_provider, image_provider_key = await image_factory.build_default()
+        image_context = agent.ImageToolContext(
+            image_provider=image_provider, provider_key=image_provider_key, store=store
+        )
 
         turn = await agent.resume_after_decision(
             provider,
@@ -561,10 +772,13 @@ async def _resolve_tool_call(
             result_payload=outcome,
             workspace=workspace,
             logs_dir=settings.resolved_logs_dir(),
+            image_context=image_context,
         )
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (StorageError, ContextError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ProviderNotConfiguredError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ProviderError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -574,6 +788,7 @@ async def _resolve_tool_call(
         risk = tool_impl.RISK_BY_TOOL.get(new_call.name, "medium")
         new_record = store.create_pending_tool_call(
             conversation_id,
+            owner_id,
             new_call.id,
             new_call.name,
             new_call.arguments,
@@ -585,8 +800,10 @@ async def _resolve_tool_call(
         )
         conversation, assistant_message = store.append_assistant_message(
             conversation_id,
+            owner_id,
             _tool_proposal_text(new_call),
             tool_call_id=new_call.id,
+            image_filename=turn.image_filename,
         )
         return ToolCallDecisionResponse(
             conversation=conversation,
@@ -601,7 +818,9 @@ async def _resolve_tool_call(
             ),
         )
 
-    conversation, assistant_message = store.append_assistant_message(conversation_id, turn.message.content)
+    conversation, assistant_message = store.append_assistant_message(
+        conversation_id, owner_id, turn.message.content, image_filename=turn.image_filename
+    )
     return ToolCallDecisionResponse(conversation=conversation, assistant_message=assistant_message)
 
 
@@ -609,9 +828,12 @@ async def _resolve_tool_call(
 def get_attachment(
     filename: str,
     store: ConversationStore = Depends(get_conversation_store),
+    user: auth.User = Depends(auth.get_current_user),
 ) -> FileResponse:
     try:
         path = store.attachment_path(filename)
     except (NotFoundError, StorageError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if store.attachment_owner_id(filename) != user.id:
+        raise HTTPException(status_code=404, detail="The image does not exist.")
     return FileResponse(path)

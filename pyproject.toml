@@ -15,6 +15,8 @@ dependencies = [
   "onnxruntime>=1.29,<2",
   "uvicorn[standard]>=0.34,<1",
   "winotify>=1.1,<2; sys_platform == 'win32'",
+  "bcrypt>=4,<5",
+  "cryptography>=43,<44",
 ]
 
 [project.optional-dependencies]
