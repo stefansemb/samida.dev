@@ -553,7 +553,8 @@ export default function Home() {
   const chatMessageCount = messages.length === 1 && messages[0] === greeting
     ? 0
     : messages.length;
-  const usageStatus = lastUsedProvider === 'openai' || lastUsedProvider === 'anthropic'
+  const effectiveProvider = lastUsedProvider ?? resolveProviderModel(selectedModel).provider;
+  const usageStatus = effectiveProvider === 'openai' || effectiveProvider === 'anthropic'
     ? 'Se API-dashboard'
     : 'Ingen molnlimit';
   const selectableModels = modelCatalog
@@ -793,8 +794,8 @@ export default function Home() {
         <section className="usage-card">
           <div className="panel-heading"><Gauge size={18} /><h3>Usage</h3></div>
           <dl className="status-list usage-list">
-            <div><dt>Provider</dt><dd>{lastUsedProvider ?? 'ollama'}</dd></div>
-            <div><dt>Model</dt><dd>{lastUsedModel ?? health?.configured_model ?? 'gemma4:e4b'}</dd></div>
+            <div><dt>Provider</dt><dd>{effectiveProvider}</dd></div>
+            <div><dt>Model</dt><dd>{lastUsedModel ?? resolveProviderModel(selectedModel).model}</dd></div>
             <div><dt>This chat</dt><dd>{chatMessageCount} messages</dd></div>
             <div><dt>Tokens</dt><dd>{chatUsage?.total_tokens ?? '–'}</dd></div>
             <div><dt>Limit</dt><dd className="good">{usageStatus}</dd></div>
