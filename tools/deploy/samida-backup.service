@@ -1,0 +1,6 @@
+[Unit]
+Description=SAMIDA backup (.env + database + attachments)
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /home/donste/services/samida/tools/backup-samida.sh
