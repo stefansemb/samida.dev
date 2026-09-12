@@ -141,7 +141,7 @@ declare global {
   }
 }
 
-const DEFAULT_MODEL = 'gemma4:e4b';
+const DEFAULT_MODEL = 'anthropic:claude-haiku-4-5';
 const greeting: Message = {
   role: 'assistant',
   content: "Hi! I'm connected and ready to help. What would you like to work on?",
