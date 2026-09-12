@@ -6,9 +6,9 @@ from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
-from samida import agent, auth, tools as tool_impl
+from samida import agent, auth, rate_limit, tools as tool_impl
 from samida.config import Settings, get_settings
 from samida.context import ContextBuilder, ContextError
 from samida.crypto import CryptoError, encrypt_secret
@@ -96,6 +96,16 @@ app.add_middleware(
     allow_headers=["Content-Type"],
 )
 
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    try:
+        rate_limit.global_limiter.check(request)
+    except HTTPException as exc:
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    return await call_next(request)
+
+
 @app.post("/api/workspace/pick", response_model=WorkspacePickResponse)
 def pick_workspace(user: auth.User = Depends(auth.get_current_user)) -> WorkspacePickResponse:
     """Open a local native folder picker. Desktop-only; unavailable on a headless server."""
@@ -117,7 +127,12 @@ def pick_workspace(user: auth.User = Depends(auth.get_current_user)) -> Workspac
     return WorkspacePickResponse(path=path)
 
 
-@app.post("/api/auth/register", response_model=UserPublic, status_code=201)
+@app.post(
+    "/api/auth/register",
+    response_model=UserPublic,
+    status_code=201,
+    dependencies=[Depends(rate_limit.enforce_register_limit)],
+)
 def register(
     request: RegisterRequest,
     response: Response,
@@ -135,7 +150,11 @@ def register(
     return UserPublic(id=user["id"], email=user["email"], tier=user["tier"])
 
 
-@app.post("/api/auth/login", response_model=UserPublic)
+@app.post(
+    "/api/auth/login",
+    response_model=UserPublic,
+    dependencies=[Depends(rate_limit.enforce_login_limit)],
+)
 def login(
     request: LoginRequest,
     response: Response,
