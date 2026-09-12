@@ -23,11 +23,11 @@ MAX_TOOL_ITERATIONS = 4
 @dataclass
 class ImageToolContext:
     """Everything the generate_image tool needs to run and persist its
-    result. image_provider is None when the calling user hasn't configured
-    any image-generation key yet."""
+    result. providers is the user's configured image providers in
+    preference order (Pollinations always last, as the free/keyless
+    fallback) - empty only if even Pollinations couldn't be built."""
 
-    image_provider: ImageProvider | None
-    provider_key: str | None
+    providers: list[tuple[ImageProvider, str]]
     store: ConversationStore
 
 
@@ -77,22 +77,28 @@ async def web_search_tool(client: SearchClient | None, query: str) -> dict:
 
 
 async def generate_image_tool(context: ImageToolContext | None, prompt: str) -> dict:
-    if context is None or context.image_provider is None:
+    if context is None or not context.providers:
         return {
             "error": "No image generation provider is configured. Add an API key "
             "(GPT Image, Flux, or Gemini) under Settings.",
         }
     if not prompt.strip():
         return {"error": "Please describe the image to generate."}
-    try:
-        result = await context.image_provider.generate(prompt)
-    except ProviderError as exc:
-        return {"error": str(exc)}
-    filename = context.store.save_generated_image(result.image_bytes, result.mime_type)
-    payload: dict = {"image_filename": filename, "prompt": prompt, "provider": context.provider_key}
-    if result.revised_prompt:
-        payload["revised_prompt"] = result.revised_prompt
-    return payload
+
+    last_error: str | None = None
+    for image_provider, provider_key in context.providers:
+        try:
+            result = await image_provider.generate(prompt)
+        except ProviderError as exc:
+            last_error = str(exc)
+            continue
+        filename = context.store.save_generated_image(result.image_bytes, result.mime_type)
+        payload: dict = {"image_filename": filename, "prompt": prompt, "provider": provider_key}
+        if result.revised_prompt:
+            payload["revised_prompt"] = result.revised_prompt
+        return payload
+
+    return {"error": last_error or "Image generation failed."}
 
 
 async def run_turn(

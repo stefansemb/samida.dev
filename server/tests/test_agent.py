@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from samida import agent
-from samida.providers.base import ChatTurnResult, ToolCallRequest
+from samida.providers.base import ChatTurnResult, ProviderError, ToolCallRequest
 from samida.providers.image_base import ImageGenerationResult
 from samida.schemas import ChatMessage
 from samida.search import SearchResult
@@ -19,6 +19,13 @@ class _FakeImageProvider:
 
     async def generate(self, prompt: str, *, size: str | None = None) -> ImageGenerationResult:
         return ImageGenerationResult(image_bytes=b"bytes", mime_type="image/png")
+
+
+class _QuotaExceededImageProvider:
+    name = "nano_banana"
+
+    async def generate(self, prompt: str, *, size: str | None = None) -> ImageGenerationResult:
+        raise ProviderError("Gemini rejected the request: quota exceeded")
 
 
 class _ToolThenFinalProvider:
@@ -43,7 +50,7 @@ class _ToolThenFinalProvider:
 @pytest.mark.asyncio
 async def test_run_turn_executes_generate_image_and_attaches_filename(tmp_path: Path) -> None:
     provider = _ToolThenFinalProvider()
-    context = agent.ImageToolContext(image_provider=_FakeImageProvider(), provider_key="gpt_image", store=_FakeStore())
+    context = agent.ImageToolContext(providers=[(_FakeImageProvider(), "gpt_image")], store=_FakeStore())
 
     outcome = await agent.run_turn(
         provider,
@@ -58,6 +65,34 @@ async def test_run_turn_executes_generate_image_and_attaches_filename(tmp_path: 
     assert outcome.message is not None
     assert outcome.message.content == "Här är bilden!"
     assert provider.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_image_tool_falls_back_to_next_provider_on_quota_error() -> None:
+    context = agent.ImageToolContext(
+        providers=[
+            (_QuotaExceededImageProvider(), "nano_banana"),
+            (_FakeImageProvider(), "gpt_image"),
+        ],
+        store=_FakeStore(),
+    )
+
+    outcome = await agent.generate_image_tool(context, "en drake")
+
+    assert outcome["image_filename"] == "generated-abc.png"
+    assert outcome["provider"] == "gpt_image"
+
+
+@pytest.mark.asyncio
+async def test_generate_image_tool_returns_last_error_when_all_providers_fail() -> None:
+    context = agent.ImageToolContext(
+        providers=[(_QuotaExceededImageProvider(), "nano_banana")],
+        store=_FakeStore(),
+    )
+
+    outcome = await agent.generate_image_tool(context, "en drake")
+
+    assert outcome == {"error": "Gemini rejected the request: quota exceeded"}
 
 
 @pytest.mark.asyncio

@@ -248,7 +248,7 @@ async def test_generate_image_tool_without_context_returns_friendly_error() -> N
 @pytest.mark.asyncio
 async def test_generate_image_tool_rejects_blank_prompt() -> None:
     store = _FakeStore()
-    context = agent.ImageToolContext(image_provider=_FakeImageProvider(), provider_key="gpt_image", store=store)
+    context = agent.ImageToolContext(providers=[(_FakeImageProvider(), "gpt_image")], store=store)
     outcome = await agent.generate_image_tool(context, "   ")
     assert "error" in outcome
     assert not store.saved
@@ -258,7 +258,7 @@ async def test_generate_image_tool_rejects_blank_prompt() -> None:
 async def test_generate_image_tool_saves_image_and_returns_filename() -> None:
     store = _FakeStore()
     provider = _FakeImageProvider(result=ImageGenerationResult(image_bytes=b"bytes", mime_type="image/png"))
-    context = agent.ImageToolContext(image_provider=provider, provider_key="gpt_image", store=store)
+    context = agent.ImageToolContext(providers=[(provider, "gpt_image")], store=store)
 
     outcome = await agent.generate_image_tool(context, "en drake")
 
@@ -270,7 +270,7 @@ async def test_generate_image_tool_saves_image_and_returns_filename() -> None:
 async def test_generate_image_tool_surfaces_provider_error_without_saving() -> None:
     store = _FakeStore()
     provider = _FakeImageProvider(error=ProviderError("nyckeln avvisades"))
-    context = agent.ImageToolContext(image_provider=provider, provider_key="gpt_image", store=store)
+    context = agent.ImageToolContext(providers=[(provider, "gpt_image")], store=store)
 
     outcome = await agent.generate_image_tool(context, "en drake")
 
@@ -290,7 +290,31 @@ async def test_image_provider_factory_falls_back_to_pollinations_when_unconfigur
 
     factory = ImageProviderFactory("user-1", _NoCredentialStore(), Settings())
 
-    provider, provider_key = await factory.build_default()
+    chain = await factory.build_fallback_chain()
 
-    assert provider_key == "pollinations"
-    assert isinstance(provider, PollinationsProvider)
+    assert [key for _, key in chain] == ["pollinations"]
+    assert isinstance(chain[0][0], PollinationsProvider)
+
+
+@pytest.mark.asyncio
+async def test_image_provider_factory_orders_chain_by_preference_then_pollinations() -> None:
+    from cryptography.fernet import Fernet
+
+    from samida.config import Settings as _Settings
+    from samida.crypto import encrypt_secret
+    from samida.dependencies import ImageProviderFactory
+
+    settings = _Settings(secret_key=Fernet.generate_key().decode())
+    encrypted = encrypt_secret("k", settings)
+
+    class _Store:
+        def get_provider_credential(self, user_id, kind, provider_key):
+            if provider_key in {"flux", "nano_banana"}:
+                return {"api_key_encrypted": encrypted, "base_url_override": None, "default_model": None}
+            return None
+
+    factory = ImageProviderFactory("user-1", _Store(), settings)
+
+    chain = await factory.build_fallback_chain()
+
+    assert [key for _, key in chain] == ["flux", "nano_banana", "pollinations"]

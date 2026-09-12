@@ -97,17 +97,18 @@ class ImageProviderFactory:
             timeout=self._settings.request_timeout_seconds,
         )
 
-    async def build_default(self) -> tuple[ImageProvider, str]:
-        """Return the user's first configured image provider, in a fixed
-        preference order, since the generate_image tool takes no provider
-        argument. Falls back to Pollinations.ai (free; keyless unless the
-        user optionally added their own free token) if the user hasn't
-        configured any paid provider."""
+    async def build_fallback_chain(self) -> list[tuple[ImageProvider, str]]:
+        """The user's configured image providers, in preference order, with
+        Pollinations.ai always appended last as the free/keyless guaranteed
+        fallback. The generate_image tool tries each in turn so a quota or
+        billing error from one paid provider doesn't fail the whole request."""
+        chain: list[tuple[ImageProvider, str]] = []
         for provider_key in IMAGE_PROVIDER_PREFERENCE:
             credential = self._store.get_provider_credential(self._user_id, "image", provider_key)
             if credential is not None:
-                return await self.build(provider_key), provider_key
-        return await self.build("pollinations"), "pollinations"
+                chain.append((await self.build(provider_key), provider_key))
+        chain.append((await self.build("pollinations"), "pollinations"))
+        return chain
 
 
 @lru_cache

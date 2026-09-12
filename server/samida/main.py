@@ -551,10 +551,8 @@ async def conversation_chat(
             selected_model = settings.ollama_vision_model
         provider, resolved_model = await factory.build(request.provider, selected_model)
         workspace = _resolve_workspace(request.working_directory)
-        image_provider, image_provider_key = await image_factory.build_default()
-        image_context = agent.ImageToolContext(
-            image_provider=image_provider, provider_key=image_provider_key, store=store
-        )
+        image_providers = await image_factory.build_fallback_chain()
+        image_context = agent.ImageToolContext(providers=image_providers, store=store)
         turn = await agent.run_turn(
             provider,
             resolved_model,
@@ -767,10 +765,8 @@ async def _resolve_tool_call(
         context = context_builder.build(context_messages, record["profile"], record["working_directory"])
         model_history = [ChatMessage.model_validate(item) for item in store.model_messages(conversation_id, owner_id)]
         provider, _resolved = await factory.build(record["provider"], record["model"])
-        image_provider, image_provider_key = await image_factory.build_default()
-        image_context = agent.ImageToolContext(
-            image_provider=image_provider, provider_key=image_provider_key, store=store
-        )
+        image_providers = await image_factory.build_fallback_chain()
+        image_context = agent.ImageToolContext(providers=image_providers, store=store)
 
         turn = await agent.resume_after_decision(
             provider,
