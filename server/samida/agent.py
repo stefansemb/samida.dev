@@ -3,6 +3,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from samida.camofox import CamoFoxClient, CamoFoxError
+from samida.google_integration import GmailError, GoogleCalendarError, GoogleIntegration, GoogleOAuthError
+from samida.google_integration import list_recent_emails as fetch_recent_emails
+from samida.google_integration import list_upcoming_events as fetch_upcoming_events
 from samida.providers.base import ModelProvider, ProviderError, ToolCallRequest
 from samida.providers.image_base import ImageProvider
 from samida.schemas import ChatMessage
@@ -29,6 +32,7 @@ _TARGET_ARG_BY_TOOL: dict[str, str] = {
     "get_weather": "location",
     "save_note": "content",
     "recall_notes": "query",
+    "list_recent_emails": "query",
 }
 
 
@@ -47,6 +51,11 @@ class ImageToolContext:
 class NotesToolContext:
     store: ConversationStore
     user_id: str
+
+
+@dataclass
+class GoogleToolContext:
+    integration: GoogleIntegration
 
 
 @dataclass
@@ -158,6 +167,42 @@ async def recall_notes_tool(context: NotesToolContext | None, query: str) -> dic
     return {"notes": [{"content": note["content"], "created_at": note["created_at"]} for note in notes]}
 
 
+async def calendar_tool(context: GoogleToolContext | None, max_results: int | None) -> dict:
+    if context is None or not context.integration.is_connected():
+        return {"error": "Google Calendar is not connected. Connect it under Settings."}
+    try:
+        access_token = await context.integration.get_valid_access_token()
+        events = await fetch_upcoming_events(access_token, max_results or 10)
+    except (GoogleOAuthError, GoogleCalendarError) as exc:
+        return {"error": str(exc)}
+    if not events:
+        return {"events": [], "message": "No upcoming events found."}
+    return {
+        "events": [
+            {"summary": e.summary, "start": e.start, "end": e.end, "location": e.location}
+            for e in events
+        ],
+    }
+
+
+async def email_tool(context: GoogleToolContext | None, query: str) -> dict:
+    if context is None or not context.integration.is_connected():
+        return {"error": "Gmail is not connected. Connect it under Settings."}
+    try:
+        access_token = await context.integration.get_valid_access_token()
+        emails = await fetch_recent_emails(access_token, query)
+    except (GoogleOAuthError, GmailError) as exc:
+        return {"error": str(exc)}
+    if not emails:
+        return {"emails": [], "message": "No matching emails found."}
+    return {
+        "emails": [
+            {"subject": e.subject, "from": e.sender, "date": e.date, "snippet": e.snippet}
+            for e in emails
+        ],
+    }
+
+
 async def generate_image_tool(context: ImageToolContext | None, prompt: str) -> dict:
     if context is None or not context.providers:
         return {
@@ -195,6 +240,7 @@ async def run_turn(
     camofox_client: CamoFoxClient | None = None,
     weather_client: WeatherClient | None = None,
     notes_context: NotesToolContext | None = None,
+    google_context: GoogleToolContext | None = None,
 ) -> AgentTurnOutcome:
     """Run model turns, auto-executing low-risk tool calls, until a final message
     or a medium-risk (confirmation-required) tool call is produced."""
@@ -242,6 +288,10 @@ async def run_turn(
                 outcome = await save_note_tool(notes_context, arg_value)
             elif call.name == "recall_notes":
                 outcome = await recall_notes_tool(notes_context, arg_value)
+            elif call.name == "list_calendar_events":
+                outcome = await calendar_tool(google_context, call.arguments.get("max_results"))
+            elif call.name == "list_recent_emails":
+                outcome = await email_tool(google_context, arg_value)
             elif call.name == "generate_image":
                 outcome = await generate_image_tool(image_context, arg_value)
                 if "image_filename" in outcome:
@@ -279,6 +329,7 @@ async def resume_after_decision(
     camofox_client: CamoFoxClient | None = None,
     weather_client: WeatherClient | None = None,
     notes_context: NotesToolContext | None = None,
+    google_context: GoogleToolContext | None = None,
 ) -> AgentTurnOutcome:
     working = [*messages, _proposal_message(call), _result_message(call, result_payload)]
     return await run_turn(
@@ -292,4 +343,5 @@ async def resume_after_decision(
         camofox_client=camofox_client,
         weather_client=weather_client,
         notes_context=notes_context,
+        google_context=google_context,
     )

@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     camofox_enabled: bool = True
     camofox_base_url: str = "http://127.0.0.1:9377"
     searxng_base_url: str = "http://127.0.0.1:8888"
+    google_client_id: str | None = None
+    google_client_secret: str | None = None
+    public_base_url: str = "http://localhost:3000"
     project_root: Path = Path(__file__).resolve().parents[2]
     database_path: Path | None = None
     attachments_dir: Path | None = None

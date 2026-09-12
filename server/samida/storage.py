@@ -142,6 +142,18 @@ class ConversationStore:
                     created_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_notes_owner_created ON notes(owner_id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS oauth_connections (
+                    id TEXT PRIMARY KEY,
+                    owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    provider TEXT NOT NULL,
+                    access_token_encrypted TEXT NOT NULL,
+                    refresh_token_encrypted TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    scope TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE (owner_id, provider)
+                );
                 PRAGMA optimize;
                 """
             )
@@ -398,6 +410,47 @@ class ConversationStore:
                     (owner_id, limit),
                 ).fetchall()
         return [dict(row) for row in rows]
+
+    def save_oauth_connection(
+        self, owner_id: str, provider: str, access_token_encrypted: str, refresh_token_encrypted: str, expires_at: str, scope: str
+    ) -> None:
+        timestamp = _now()
+        with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT id FROM oauth_connections WHERE owner_id = ? AND provider = ?", (owner_id, provider)
+            ).fetchone()
+            if existing:
+                connection.execute(
+                    "UPDATE oauth_connections SET access_token_encrypted = ?, refresh_token_encrypted = ?, "
+                    "expires_at = ?, scope = ?, updated_at = ? WHERE id = ?",
+                    (access_token_encrypted, refresh_token_encrypted, expires_at, scope, timestamp, existing["id"]),
+                )
+            else:
+                connection.execute(
+                    "INSERT INTO oauth_connections (id, owner_id, provider, access_token_encrypted, "
+                    "refresh_token_encrypted, expires_at, scope, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (str(uuid4()), owner_id, provider, access_token_encrypted, refresh_token_encrypted, expires_at, scope, timestamp, timestamp),
+                )
+
+    def update_oauth_access_token(self, owner_id: str, provider: str, access_token_encrypted: str, expires_at: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE oauth_connections SET access_token_encrypted = ?, expires_at = ?, updated_at = ? "
+                "WHERE owner_id = ? AND provider = ?",
+                (access_token_encrypted, expires_at, _now(), owner_id, provider),
+            )
+
+    def get_oauth_connection(self, owner_id: str, provider: str) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM oauth_connections WHERE owner_id = ? AND provider = ?", (owner_id, provider)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def delete_oauth_connection(self, owner_id: str, provider: str) -> None:
+        with self._connect() as connection:
+            connection.execute("DELETE FROM oauth_connections WHERE owner_id = ? AND provider = ?", (owner_id, provider))
 
     def list_research_reports(self, owner_id: str, research_type: str = "ai_general") -> list[dict]:
         with self._connect() as connection:

@@ -2,11 +2,11 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, CheckCircle2, KeyRound, Trash2 } from 'lucide-react';
+import { ArrowLeft, CalendarClock, CheckCircle2, KeyRound, Trash2 } from 'lucide-react';
 
-import { fetchCurrentUser, requestJson } from '@/lib/api';
+import { API_URL, fetchCurrentUser, requestJson } from '@/lib/api';
 import { SamidaMark } from '@/components/samida-mark';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
@@ -170,12 +170,71 @@ function resetCredential(credential: ProviderCredential): ProviderCredential {
   return { ...credential, configured: false, base_url_override: null, default_model: null, updated_at: null };
 }
 
+type GoogleStatus = { connected: boolean; configured: boolean };
+
+function GoogleIntegrationCard({ status, onDisconnected }: { status: GoogleStatus; onDisconnected: () => void }) {
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleDisconnect() {
+    setDisconnecting(true);
+    setError(null);
+    try {
+      await requestJson<void>('/api/integrations/google', { method: 'DELETE' });
+      onDisconnected();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not disconnect.');
+    } finally {
+      setDisconnecting(false);
+    }
+  }
+
+  return (
+    <div className="context-card">
+      <div className="panel-heading">
+        <CalendarClock size={16} />
+        <h3>Google Calendar &amp; Gmail</h3>
+        {status.connected && (
+          <span className="provider-configured-badge">
+            <CheckCircle2 size={13} /> Connected
+          </span>
+        )}
+      </div>
+      {error && <p className="auth-error">{error}</p>}
+      <p className="field-hint">
+        Read-only access so SAMIDA can answer questions about your upcoming events and recent emails. It can
+        never send email or create/change events.
+      </p>
+      {!status.configured && (
+        <p className="field-hint">Not set up on this server yet — ask the admin to add a Google OAuth client.</p>
+      )}
+      {status.configured && !status.connected && (
+        <a className={buttonVariants({})} href={`${API_URL}/api/integrations/google/connect`}>
+          Connect Google account
+        </a>
+      )}
+      {status.configured && status.connected && (
+        <Button disabled={disconnecting} onClick={() => void handleDisconnect()} type="button" variant="destructive">
+          <Trash2 size={14} /> {disconnecting ? 'Disconnecting…' : 'Disconnect'}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const router = useRouter();
   const [authChecked, setAuthChecked] = useState(false);
   const [chatCredentials, setChatCredentials] = useState<ProviderCredential[]>([]);
   const [imageCredentials, setImageCredentials] = useState<ProviderCredential[]>([]);
+  const [googleStatus, setGoogleStatus] = useState<GoogleStatus>({ connected: false, configured: false });
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  const loadGoogleStatus = useCallback(() => {
+    void requestJson<GoogleStatus>('/api/integrations/google/status')
+      .then(setGoogleStatus)
+      .catch(() => setGoogleStatus({ connected: false, configured: false }));
+  }, []);
 
   const loadCredentials = useCallback(async () => {
     try {
@@ -198,8 +257,9 @@ export default function SettingsPage() {
       }
       setAuthChecked(true);
       void loadCredentials();
+      loadGoogleStatus();
     });
-  }, [router, loadCredentials]);
+  }, [router, loadCredentials, loadGoogleStatus]);
 
   if (!authChecked) {
     return <main className="app-shell" />;
@@ -268,6 +328,14 @@ export default function SettingsPage() {
               }
             />
           ))}
+        </div>
+
+        <h2 className="settings-section-heading">Integrations</h2>
+        <div className="provider-card-grid">
+          <GoogleIntegrationCard
+            onDisconnected={() => setGoogleStatus((current) => ({ ...current, connected: false }))}
+            status={googleStatus}
+          />
         </div>
       </section>
     </main>

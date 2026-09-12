@@ -4,6 +4,7 @@ import pytest
 
 from samida import agent
 from samida.camofox import CamoFoxError
+from samida.google_integration import CalendarEvent, EmailSummary, GmailError, GoogleCalendarError
 from samida.providers.base import ChatTurnResult, ProviderError, ToolCallRequest
 from samida.providers.image_base import ImageGenerationResult
 from samida.schemas import ChatMessage
@@ -295,3 +296,91 @@ async def test_recall_notes_tool_falls_back_to_all_notes_when_keyword_misses() -
     outcome = await agent.recall_notes_tool(context, "kaffe")
 
     assert outcome["notes"] == [{"content": "User likes coffee without milk.", "created_at": "2026-09-13T00:00:00+00:00"}]
+
+
+class _FakeGoogleIntegration:
+    def __init__(self, connected: bool = True, token: str = "tok") -> None:
+        self._connected = connected
+        self._token = token
+
+    def is_connected(self) -> bool:
+        return self._connected
+
+    async def get_valid_access_token(self) -> str | None:
+        return self._token
+
+
+@pytest.mark.asyncio
+async def test_calendar_tool_returns_events(monkeypatch) -> None:
+    async def fake_fetch(access_token: str, max_results: int) -> list[CalendarEvent]:
+        assert access_token == "tok"
+        assert max_results == 5
+        return [CalendarEvent(summary="Standup", start="2026-09-13T09:00:00Z", end="2026-09-13T09:15:00Z", location=None)]
+
+    monkeypatch.setattr(agent, "fetch_upcoming_events", fake_fetch)
+    context = agent.GoogleToolContext(integration=_FakeGoogleIntegration())
+
+    outcome = await agent.calendar_tool(context, 5)
+
+    assert outcome["events"] == [{"summary": "Standup", "start": "2026-09-13T09:00:00Z", "end": "2026-09-13T09:15:00Z", "location": None}]
+
+
+@pytest.mark.asyncio
+async def test_calendar_tool_when_not_connected() -> None:
+    context = agent.GoogleToolContext(integration=_FakeGoogleIntegration(connected=False))
+    outcome = await agent.calendar_tool(context, None)
+    assert outcome == {"error": "Google Calendar is not connected. Connect it under Settings."}
+
+
+@pytest.mark.asyncio
+async def test_calendar_tool_surfaces_calendar_error(monkeypatch) -> None:
+    async def fake_fetch(access_token: str, max_results: int):
+        raise GoogleCalendarError("Could not read Google Calendar.")
+
+    monkeypatch.setattr(agent, "fetch_upcoming_events", fake_fetch)
+    context = agent.GoogleToolContext(integration=_FakeGoogleIntegration())
+
+    outcome = await agent.calendar_tool(context, None)
+
+    assert outcome == {"error": "Could not read Google Calendar."}
+
+
+@pytest.mark.asyncio
+async def test_email_tool_returns_emails(monkeypatch) -> None:
+    async def fake_fetch(access_token: str, query: str) -> list[EmailSummary]:
+        assert access_token == "tok"
+        assert query == "is:unread"
+        return [EmailSummary(subject="Möte imorgon", sender="chef@example.com", date="Sat, 12 Sep 2026", snippet="Hej...")]
+
+    monkeypatch.setattr(agent, "fetch_recent_emails", fake_fetch)
+    context = agent.GoogleToolContext(integration=_FakeGoogleIntegration())
+
+    outcome = await agent.email_tool(context, "is:unread")
+
+    assert outcome["emails"] == [{"subject": "Möte imorgon", "from": "chef@example.com", "date": "Sat, 12 Sep 2026", "snippet": "Hej..."}]
+
+
+@pytest.mark.asyncio
+async def test_email_tool_when_not_connected() -> None:
+    context = agent.GoogleToolContext(integration=_FakeGoogleIntegration(connected=False))
+    outcome = await agent.email_tool(context, "")
+    assert outcome == {"error": "Gmail is not connected. Connect it under Settings."}
+
+
+@pytest.mark.asyncio
+async def test_email_tool_surfaces_gmail_error(monkeypatch) -> None:
+    async def fake_fetch(access_token: str, query: str):
+        raise GmailError("Could not read Gmail.")
+
+    monkeypatch.setattr(agent, "fetch_recent_emails", fake_fetch)
+    context = agent.GoogleToolContext(integration=_FakeGoogleIntegration())
+
+    outcome = await agent.email_tool(context, "")
+
+    assert outcome == {"error": "Could not read Gmail."}
+
+
+@pytest.mark.asyncio
+async def test_calendar_tool_and_email_tool_without_context() -> None:
+    assert await agent.calendar_tool(None, None) == {"error": "Google Calendar is not connected. Connect it under Settings."}
+    assert await agent.email_tool(None, "") == {"error": "Gmail is not connected. Connect it under Settings."}

@@ -14,3 +14,4 @@ data/*
 conversations/*
 !conversations/.gitkeep
 .claude/
+*.tsbuildinfo

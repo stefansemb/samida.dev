@@ -1,10 +1,12 @@
 import asyncio
+import secrets
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 
 from samida import agent, auth, tools as tool_impl
 from samida.config import Settings, get_settings
@@ -26,6 +28,8 @@ from samida.camofox import CamoFoxClient
 from samida.dependencies import get_camofox_client, get_search_client, get_weather_client
 from samida.search import SearchClient
 from samida.weather import WeatherClient
+from samida import google_integration
+from samida.google_integration import GoogleIntegration, GoogleOAuthError
 from samida.schemas import (
     ChatMessage,
     ChatRequest,
@@ -38,6 +42,7 @@ from samida.schemas import (
     ConversationDetail,
     ConversationRename,
     ConversationSummary,
+    GoogleIntegrationStatus,
     HealthResponse,
     ModelCatalogEntry,
     PendingToolCall,
@@ -223,6 +228,88 @@ def delete_provider_credential(
         store.delete_provider_credential(user.id, kind, provider_key)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+GOOGLE_OAUTH_STATE_COOKIE = "samida_google_oauth_state"
+
+
+def _google_redirect_uri(settings: Settings) -> str:
+    return f"{settings.public_base_url.rstrip('/')}/api/integrations/google/callback"
+
+
+@app.get("/api/integrations/google/status", response_model=GoogleIntegrationStatus)
+def google_integration_status(
+    store: ConversationStore = Depends(get_conversation_store),
+    settings: Settings = Depends(get_settings),
+    user: auth.User = Depends(auth.get_current_user),
+) -> GoogleIntegrationStatus:
+    return GoogleIntegrationStatus(
+        connected=GoogleIntegration(store, settings, user.id).is_connected(),
+        configured=bool(settings.google_client_id and settings.google_client_secret),
+    )
+
+
+@app.get("/api/integrations/google/connect")
+def google_integration_connect(
+    settings: Settings = Depends(get_settings),
+    user: auth.User = Depends(auth.get_current_user),
+):
+    if not (settings.google_client_id and settings.google_client_secret):
+        raise HTTPException(status_code=400, detail="Google integration is not configured on this server.")
+    state = secrets.token_urlsafe(24)
+    auth_url = google_integration.build_auth_url(settings.google_client_id, _google_redirect_uri(settings), state)
+    redirect = RedirectResponse(auth_url)
+    redirect.set_cookie(
+        GOOGLE_OAUTH_STATE_COOKIE, state, max_age=600, httponly=True, secure=settings.cookie_secure, samesite="lax",
+    )
+    return redirect
+
+
+@app.get("/api/integrations/google/callback")
+async def google_integration_callback(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    store: ConversationStore = Depends(get_conversation_store),
+    settings: Settings = Depends(get_settings),
+    user: auth.User = Depends(auth.get_current_user),
+):
+    expected_state = request.cookies.get(GOOGLE_OAUTH_STATE_COOKIE)
+    if not code or not state or not expected_state or state != expected_state:
+        raise HTTPException(status_code=400, detail="Invalid or expired Google authorization request.")
+    try:
+        payload = await google_integration.exchange_code(
+            settings.google_client_id, settings.google_client_secret, _google_redirect_uri(settings), code,
+        )
+    except GoogleOAuthError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if "refresh_token" not in payload:
+        raise HTTPException(
+            status_code=400,
+            detail="Google didn't return a refresh token. Disconnect any prior SAMIDA access at "
+            "https://myaccount.google.com/permissions and try connecting again.",
+        )
+    expires_at = datetime.now(UTC) + timedelta(seconds=payload["expires_in"])
+    store.save_oauth_connection(
+        user.id,
+        google_integration.PROVIDER,
+        encrypt_secret(payload["access_token"], settings),
+        encrypt_secret(payload["refresh_token"], settings),
+        expires_at.isoformat(),
+        payload.get("scope", ""),
+    )
+    redirect = RedirectResponse(f"{settings.public_base_url.rstrip('/')}/settings?google=connected")
+    redirect.delete_cookie(GOOGLE_OAUTH_STATE_COOKIE)
+    return redirect
+
+
+@app.delete("/api/integrations/google", status_code=204)
+def google_integration_disconnect(
+    store: ConversationStore = Depends(get_conversation_store),
+    settings: Settings = Depends(get_settings),
+    user: auth.User = Depends(auth.get_current_user),
+) -> None:
+    GoogleIntegration(store, settings, user.id).disconnect()
 
 
 @app.get("/api/models/catalog", response_model=list[ModelCatalogEntry])
@@ -557,6 +644,7 @@ async def conversation_chat(
         image_providers = await image_factory.build_fallback_chain()
         image_context = agent.ImageToolContext(providers=image_providers, store=store)
         notes_context = agent.NotesToolContext(store=store, user_id=user.id)
+        google_context = agent.GoogleToolContext(integration=GoogleIntegration(store, settings, user.id))
         turn = await agent.run_turn(
             provider,
             resolved_model,
@@ -573,6 +661,7 @@ async def conversation_chat(
             camofox_client=camofox,
             weather_client=weather_client,
             notes_context=notes_context,
+            google_context=google_context,
         )
 
         pending_tool_call: PendingToolCall | None = None
@@ -785,6 +874,7 @@ async def _resolve_tool_call(
         image_providers = await image_factory.build_fallback_chain()
         image_context = agent.ImageToolContext(providers=image_providers, store=store)
         notes_context = agent.NotesToolContext(store=store, user_id=owner_id)
+        google_context = agent.GoogleToolContext(integration=GoogleIntegration(store, settings, owner_id))
 
         turn = await agent.resume_after_decision(
             provider,
@@ -799,6 +889,7 @@ async def _resolve_tool_call(
             camofox_client=camofox,
             weather_client=weather_client,
             notes_context=notes_context,
+            google_context=google_context,
         )
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

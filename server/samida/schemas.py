@@ -33,6 +33,11 @@ class ProviderCredentialPublic(BaseModel):
     updated_at: str | None = None
 
 
+class GoogleIntegrationStatus(BaseModel):
+    connected: bool
+    configured: bool  # whether the server has Google OAuth client credentials at all
+
+
 class ModelCatalogEntry(BaseModel):
     provider_key: str
     model_name: str

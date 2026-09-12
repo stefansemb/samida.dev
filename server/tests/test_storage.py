@@ -193,3 +193,24 @@ def test_notes_are_scoped_to_their_owner(store: ConversationStore, owner_id: str
     store.save_note(owner_id, "Hemlig anteckning")
 
     assert store.list_notes(other_owner_id) == []
+
+
+def test_oauth_connection_lifecycle(store: ConversationStore, owner_id: str) -> None:
+    assert store.get_oauth_connection(owner_id, "google") is None
+
+    store.save_oauth_connection(owner_id, "google", "enc-access", "enc-refresh", "2026-09-13T00:00:00+00:00", "calendar.readonly")
+    connection = store.get_oauth_connection(owner_id, "google")
+    assert connection["access_token_encrypted"] == "enc-access"
+    assert connection["refresh_token_encrypted"] == "enc-refresh"
+
+    store.save_oauth_connection(owner_id, "google", "enc-access-2", "enc-refresh-2", "2026-09-14T00:00:00+00:00", "calendar.readonly")
+    updated = store.get_oauth_connection(owner_id, "google")
+    assert updated["access_token_encrypted"] == "enc-access-2"
+
+    store.update_oauth_access_token(owner_id, "google", "enc-access-3", "2026-09-15T00:00:00+00:00")
+    refreshed = store.get_oauth_connection(owner_id, "google")
+    assert refreshed["access_token_encrypted"] == "enc-access-3"
+    assert refreshed["refresh_token_encrypted"] == "enc-refresh-2"
+
+    store.delete_oauth_connection(owner_id, "google")
+    assert store.get_oauth_connection(owner_id, "google") is None

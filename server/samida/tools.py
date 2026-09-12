@@ -75,6 +75,42 @@ GENERAL_TOOL_SPECS: list[dict] = [
         },
     },
     {
+        "name": "list_calendar_events",
+        "description": (
+            "List the user's upcoming Google Calendar events. Only works if the user has "
+            "connected their Google account under Settings."
+        ),
+        "risk": "low",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of upcoming events to return. Defaults to 10.",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "list_recent_emails",
+        "description": (
+            "List the user's recent Gmail messages (subject, sender, date, and a short snippet - "
+            "not the full body). Only works if the user has connected their Google account under Settings."
+        ),
+        "risk": "low",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Optional Gmail search query, e.g. 'is:unread' or 'from:boss@example.com'.",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "save_note",
         "description": "Save a short personal note for the user to recall later, in any conversation.",
         "risk": "low",
