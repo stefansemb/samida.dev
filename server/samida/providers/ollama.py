@@ -46,15 +46,23 @@ def _message_payload(message: ChatMessage) -> dict:
 class OllamaProvider(ModelProvider):
     name = "ollama"
 
-    def __init__(self, base_url: str, default_model: str, timeout: float) -> None:
+    def __init__(self, base_url: str, default_model: str, timeout: float, api_key: str | None = None) -> None:
         self.base_url = base_url.rstrip("/")
         self.default_model = default_model
         self.timeout = timeout
+        self.api_key = api_key
+
+    @property
+    def _headers(self) -> dict[str, str]:
+        # Ollama's own cloud models (e.g. "gpt-oss:120b-cloud") run on
+        # https://ollama.com and are gated behind this bearer token; a local
+        # instance ignores the header if none is configured.
+        return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
 
     async def model_names(self) -> list[str]:
         try:
             async with httpx.AsyncClient(timeout=HEALTH_CHECK_TIMEOUT) as client:
-                response = await client.get(f"{self.base_url}/api/tags")
+                response = await client.get(f"{self.base_url}/api/tags", headers=self._headers)
                 response.raise_for_status()
         except httpx.HTTPError as exc:
             raise ProviderError("Ollama could not be reached.") from exc
@@ -84,6 +92,7 @@ class OllamaProvider(ModelProvider):
                 response = await client.post(
                     f"{self.base_url}/api/chat",
                     json=payload,
+                    headers=self._headers,
                 )
                 response.raise_for_status()
         except httpx.HTTPStatusError as exc:

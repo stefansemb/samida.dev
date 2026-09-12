@@ -17,6 +17,7 @@ def get_ollama_provider() -> OllamaProvider:
         base_url=settings.ollama_base_url,
         default_model=settings.ollama_chat_model,
         timeout=settings.request_timeout_seconds,
+        api_key=settings.ollama_api_key,
     )
 
 
@@ -36,6 +37,7 @@ class ChatProviderFactory:
                 base_url=self._settings.ollama_base_url,
                 default_model=self._settings.ollama_chat_model,
                 timeout=self._settings.request_timeout_seconds,
+                api_key=self._settings.ollama_api_key,
             )
             return provider, requested_model or self._settings.ollama_chat_model
 
