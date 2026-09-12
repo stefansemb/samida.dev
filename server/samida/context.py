@@ -90,11 +90,26 @@ class ContextBuilder:
     def __init__(self, project_root: Path) -> None:
         self.project_root = project_root.resolve()
 
-    def build(self, messages: list[ChatMessage], profile: str = "minimal", working_directory: str | None = None) -> BuiltContext:
+    def build(
+        self,
+        messages: list[ChatMessage],
+        profile: str = "minimal",
+        working_directory: str | None = None,
+        *,
+        is_owner: bool = False,
+    ) -> BuiltContext:
+        # The richer profiles load memory/*.md (personal facts, projects,
+        # technical setup) - none of it is scoped per user, so only the
+        # operator's own account may select anything but "minimal".
+        effective_profile = profile if (profile == "minimal" or is_owner) else "minimal"
         query = "\n".join(
             message.content for message in messages if message.role == "user"
         )
-        selected = [*PROFILE_FILES.get(profile, CORE_FILES), *self._select_memory(query)] if profile != "minimal" else list(CORE_FILES)
+        selected = (
+            [*PROFILE_FILES.get(effective_profile, CORE_FILES), *self._select_memory(query)]
+            if effective_profile != "minimal"
+            else list(CORE_FILES)
+        )
         sections = [self._load(relative_path) for relative_path in selected]
         prompt = (
             "You are SAMIDA. Answer the user's question directly. "

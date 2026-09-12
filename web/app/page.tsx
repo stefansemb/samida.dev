@@ -742,10 +742,14 @@ export default function Home() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="minimal">Minimal</SelectItem>
-                <SelectItem value="samida-standard">SAMIDA standard</SelectItem>
-                <SelectItem value="coding">Coding</SelectItem>
-                <SelectItem value="jarvis">Jarvis</SelectItem>
-                <SelectItem value="unreal">Unreal</SelectItem>
+                {currentUser?.is_owner && (
+                  <>
+                    <SelectItem value="samida-standard">SAMIDA standard</SelectItem>
+                    <SelectItem value="coding">Coding</SelectItem>
+                    <SelectItem value="jarvis">Jarvis</SelectItem>
+                    <SelectItem value="unreal">Unreal</SelectItem>
+                  </>
+                )}
               </SelectContent>
             </Select>
           </div>

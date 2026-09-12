@@ -147,7 +147,7 @@ def register(
     user = store.create_user(email, auth.hash_password(request.password))
     raw_token, expires_at = auth.issue_session(store, user["id"])
     auth.set_session_cookie(response, raw_token, expires_at, secure=settings.cookie_secure)
-    return UserPublic(id=user["id"], email=user["email"], tier=user["tier"])
+    return UserPublic(id=user["id"], email=user["email"], tier=user["tier"], is_owner=auth.is_owner(user["email"], settings))
 
 
 @app.post(
@@ -167,7 +167,7 @@ def login(
         raise HTTPException(status_code=401, detail="Incorrect email or password.")
     raw_token, expires_at = auth.issue_session(store, user["id"])
     auth.set_session_cookie(response, raw_token, expires_at, secure=settings.cookie_secure)
-    return UserPublic(id=user["id"], email=user["email"], tier=user["tier"])
+    return UserPublic(id=user["id"], email=user["email"], tier=user["tier"], is_owner=auth.is_owner(user["email"], settings))
 
 
 @app.post("/api/auth/logout", status_code=204)
@@ -183,8 +183,11 @@ def logout(
 
 
 @app.get("/api/auth/me", response_model=UserPublic)
-def me(user: auth.User = Depends(auth.get_current_user)) -> UserPublic:
-    return UserPublic(id=user.id, email=user.email, tier=user.tier)
+def me(
+    user: auth.User = Depends(auth.get_current_user),
+    settings: Settings = Depends(get_settings),
+) -> UserPublic:
+    return UserPublic(id=user.id, email=user.email, tier=user.tier, is_owner=auth.is_owner(user.email, settings))
 
 
 @app.get("/api/settings/providers", response_model=list[ProviderCredentialPublic])
@@ -423,9 +426,12 @@ async def chat(
     settings: Settings = Depends(get_settings),
     context_builder: ContextBuilder = Depends(get_context_builder),
     factory: ChatProviderFactory = Depends(get_chat_provider_factory),
+    user: auth.User = Depends(auth.get_current_user),
 ) -> ChatResponse:
     try:
-        context = context_builder.build(request.messages, request.profile, request.working_directory)
+        context = context_builder.build(
+            request.messages, request.profile, request.working_directory, is_owner=auth.is_owner(user.email, settings)
+        )
         selected_model = request.model
         if selected_model is None and any(message.images for message in request.messages):
             selected_model = settings.ollama_vision_model
@@ -491,11 +497,22 @@ def list_reminders(
 ) -> list[dict]:
     return store.list_reminders(user.id)
 
+GENERIC_PRIORITIES_CONTENT = """\
+- Ask me to search the web for current information
+- Generate an image from a description
+- Check the weather for any city
+- Save and recall personal notes across chats
+- Read your Google Calendar and Gmail, once connected under Settings
+"""
+
+
 @app.get("/api/priorities")
 def get_priorities(
     settings: Settings = Depends(get_settings),
     user: auth.User = Depends(auth.get_current_user),
 ) -> dict[str, str]:
+    if not auth.is_owner(user.email, settings):
+        return {"content": GENERIC_PRIORITIES_CONTENT}
     path = settings.project_root / "memory" / "priorities.md"
     return {"content": path.read_text(encoding="utf-8") if path.exists() else ""}
 
@@ -650,7 +667,9 @@ async def conversation_chat(
             content=current_content,
             images=[image_base64] if image_base64 else [],
         )
-        context = context_builder.build([*context_messages, current], request.profile, request.working_directory)
+        context = context_builder.build(
+            [*context_messages, current], request.profile, request.working_directory, is_owner=auth.is_owner(user.email, settings)
+        )
         model_history = [
             ChatMessage.model_validate(message)
             for message in store.model_messages(conversation_id, user.id)
@@ -803,6 +822,7 @@ async def approve_tool_call(
         weather_client=weather_client,
         settings=settings,
         owner_id=user.id,
+        is_owner=auth.is_owner(user.email, settings),
     )
 
 
@@ -836,6 +856,7 @@ async def reject_tool_call(
         weather_client=weather_client,
         settings=settings,
         owner_id=user.id,
+        is_owner=auth.is_owner(user.email, settings),
     )
 
 
@@ -853,6 +874,7 @@ async def _resolve_tool_call(
     weather_client: WeatherClient,
     settings: Settings,
     owner_id: str,
+    is_owner: bool,
 ) -> ToolCallDecisionResponse:
     try:
         record = store.get_tool_call(tool_call_id, owner_id)
@@ -887,7 +909,9 @@ async def _resolve_tool_call(
 
         history = [StoredMessage.model_validate(item) for item in store.messages(conversation_id, owner_id)]
         context_messages = [ChatMessage(role=item.role, content=item.content or "[Screenshot]") for item in history]
-        context = context_builder.build(context_messages, record["profile"], record["working_directory"])
+        context = context_builder.build(
+            context_messages, record["profile"], record["working_directory"], is_owner=is_owner
+        )
         model_history = [ChatMessage.model_validate(item) for item in store.model_messages(conversation_id, owner_id)]
         provider, _resolved = await factory.build(record["provider"], record["model"])
         image_providers = await image_factory.build_fallback_chain()

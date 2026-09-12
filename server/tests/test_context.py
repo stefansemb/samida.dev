@@ -9,10 +9,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 def test_core_instructions_are_always_loaded() -> None:
     context = ContextBuilder(PROJECT_ROOT).build(
-        [ChatMessage(role="user", content="Hej!")]
-        ,
-            profile="samida-standard",
-        )
+        [ChatMessage(role="user", content="Hej!")],
+        profile="samida-standard",
+        is_owner=True,
+    )
 
     assert context.included_files[:5] == ["AGENT.md", "instructions/safety.md", "instructions/work-rules.md", "instructions/communication-style.md", "instructions/memory-policy.md"]
     assert "You are SAMIDA" in context.system_message.content
@@ -27,11 +27,25 @@ def test_project_and_technical_memory_are_selected_for_unreal_request() -> None:
             )
         ],
         profile="samida-standard",
+        is_owner=True,
     )
 
     assert "memory/projects.md" in context.included_files
     assert "memory/technical-context.md" in context.included_files
     assert "memory/personal.md" not in context.included_files
+
+
+def test_non_owner_is_downgraded_to_minimal_regardless_of_requested_profile() -> None:
+    """The richer profiles load memory/*.md - the operator's personal facts,
+    projects, and technical setup - which aren't scoped per user, so only the
+    owner account may use anything but "minimal"."""
+    context = ContextBuilder(PROJECT_ROOT).build(
+        [ChatMessage(role="user", content="Hjälp mig med mitt Pirate Survival-projekt i Unreal.")],
+        profile="samida-standard",
+        is_owner=False,
+    )
+
+    assert context.included_files == list(CORE_FILES)
 
 
 def test_personal_memory_is_not_loaded_for_unrelated_request() -> None:

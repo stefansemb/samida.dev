@@ -26,6 +26,7 @@ export type CurrentUser = {
   id: string;
   email: string;
   tier: string;
+  is_owner: boolean;
 };
 
 export async function fetchCurrentUser(): Promise<CurrentUser | null> {

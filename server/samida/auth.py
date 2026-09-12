@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 import bcrypt
 from fastapi import Depends, HTTPException, Request, Response
 
+from samida.config import Settings
 from samida.dependencies import get_conversation_store
 from samida.storage import ConversationStore
 
@@ -18,6 +19,14 @@ class User:
     id: str
     email: str
     tier: str
+
+
+def is_owner(email: str, settings: Settings) -> bool:
+    """Whether this account is SAMIDA's operator - the only one allowed the
+    richer profiles (samida-standard/coding/jarvis/unreal), since those load
+    the operator's personal memory files (memory/*.md), which aren't scoped
+    per user yet."""
+    return bool(settings.owner_email) and email.strip().casefold() == settings.owner_email.strip().casefold()
 
 
 def hash_password(password: str) -> str:

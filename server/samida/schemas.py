@@ -17,6 +17,7 @@ class UserPublic(BaseModel):
     id: str
     email: str
     tier: str
+    is_owner: bool = False
 
 
 class ProviderCredentialUpsert(BaseModel):

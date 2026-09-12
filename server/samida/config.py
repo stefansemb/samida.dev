@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     google_client_id: str | None = None
     google_client_secret: str | None = None
     public_base_url: str = "http://localhost:3000"
+    owner_email: str | None = None
     project_root: Path = Path(__file__).resolve().parents[2]
     database_path: Path | None = None
     attachments_dir: Path | None = None
