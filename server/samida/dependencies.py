@@ -7,6 +7,7 @@ from samida.crypto import decrypt_secret
 from samida.ocr import OcrService
 from samida.providers import ImageProvider, ModelProvider, OllamaProvider, ProviderNotConfiguredError
 from samida.providers.registry import CHAT_PROVIDER_SPECS, IMAGE_PROVIDER_PREFERENCE, IMAGE_PROVIDER_SPECS
+from samida.search import SearchClient
 from samida.storage import ConversationStore
 
 
@@ -131,3 +132,9 @@ def get_ocr_service() -> OcrService:
 def get_camofox_client() -> CamoFoxClient | None:
     settings = get_settings()
     return CamoFoxClient(settings.camofox_base_url, settings.request_timeout_seconds) if settings.camofox_enabled else None
+
+
+@lru_cache
+def get_search_client() -> SearchClient:
+    settings = get_settings()
+    return SearchClient(settings.searxng_base_url, settings.request_timeout_seconds)

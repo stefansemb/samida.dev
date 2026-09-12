@@ -23,7 +23,8 @@ from samida.providers.registry import CHAT_PROVIDER_SPECS, IMAGE_PROVIDER_SPECS
 from samida.ocr import OcrService
 from samida.research import run_research
 from samida.camofox import CamoFoxClient
-from samida.dependencies import get_camofox_client
+from samida.dependencies import get_camofox_client, get_search_client
+from samida.search import SearchClient
 from samida.schemas import (
     ChatMessage,
     ChatRequest,
@@ -502,6 +503,7 @@ async def conversation_chat(
     context_builder: ContextBuilder = Depends(get_context_builder),
     store: ConversationStore = Depends(get_conversation_store),
     ocr: OcrService = Depends(get_ocr_service),
+    search_client: SearchClient = Depends(get_search_client),
     settings: Settings = Depends(get_settings),
     user: auth.User = Depends(auth.get_current_user),
 ) -> ConversationChatResponse:
@@ -565,6 +567,7 @@ async def conversation_chat(
             workspace=workspace,
             logs_dir=settings.resolved_logs_dir(),
             image_context=image_context,
+            search_client=search_client,
         )
 
         pending_tool_call: PendingToolCall | None = None
@@ -668,6 +671,7 @@ async def approve_tool_call(
     image_factory: ImageProviderFactory = Depends(get_image_provider_factory),
     context_builder: ContextBuilder = Depends(get_context_builder),
     store: ConversationStore = Depends(get_conversation_store),
+    search_client: SearchClient = Depends(get_search_client),
     settings: Settings = Depends(get_settings),
     user: auth.User = Depends(auth.get_current_user),
 ) -> ToolCallDecisionResponse:
@@ -679,6 +683,7 @@ async def approve_tool_call(
         image_factory=image_factory,
         context_builder=context_builder,
         store=store,
+        search_client=search_client,
         settings=settings,
         owner_id=user.id,
     )
@@ -695,6 +700,7 @@ async def reject_tool_call(
     image_factory: ImageProviderFactory = Depends(get_image_provider_factory),
     context_builder: ContextBuilder = Depends(get_context_builder),
     store: ConversationStore = Depends(get_conversation_store),
+    search_client: SearchClient = Depends(get_search_client),
     settings: Settings = Depends(get_settings),
     user: auth.User = Depends(auth.get_current_user),
 ) -> ToolCallDecisionResponse:
@@ -706,6 +712,7 @@ async def reject_tool_call(
         image_factory=image_factory,
         context_builder=context_builder,
         store=store,
+        search_client=search_client,
         settings=settings,
         owner_id=user.id,
     )
@@ -720,6 +727,7 @@ async def _resolve_tool_call(
     image_factory: ImageProviderFactory,
     context_builder: ContextBuilder,
     store: ConversationStore,
+    search_client: SearchClient,
     settings: Settings,
     owner_id: str,
 ) -> ToolCallDecisionResponse:
@@ -773,6 +781,7 @@ async def _resolve_tool_call(
             workspace=workspace,
             logs_dir=settings.resolved_logs_dir(),
             image_context=image_context,
+            search_client=search_client,
         )
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

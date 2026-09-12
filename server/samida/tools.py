@@ -6,6 +6,24 @@ MAX_READ_BYTES = 200_000
 
 GENERAL_TOOL_SPECS: list[dict] = [
     {
+        "name": "web_search",
+        "description": (
+            "Search the web for current information, news, or facts you don't already know. "
+            "Works regardless of which chat model is answering."
+        ),
+        "risk": "low",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query.",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "generate_image",
         "description": (
             "Generate an image from a text description using the user's configured "

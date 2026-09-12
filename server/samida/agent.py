@@ -5,6 +5,7 @@ from pathlib import Path
 from samida.providers.base import ModelProvider, ProviderError, ToolCallRequest
 from samida.providers.image_base import ImageProvider
 from samida.schemas import ChatMessage
+from samida.search import SearchClient, SearchError
 from samida.storage import ConversationStore
 from samida.tools import (
     GENERAL_TOOL_SPECS,
@@ -56,6 +57,25 @@ def _result_message(call: ToolCallRequest, payload: dict) -> ChatMessage:
     )
 
 
+async def web_search_tool(client: SearchClient | None, query: str) -> dict:
+    if client is None:
+        return {"error": "Web search is not configured on this server."}
+    if not query.strip():
+        return {"error": "Please provide a search query."}
+    try:
+        results = await client.search(query)
+    except SearchError as exc:
+        return {"error": str(exc)}
+    if not results:
+        return {"results": [], "message": "No results found."}
+    return {
+        "results": [
+            {"title": result.title, "url": result.url, "snippet": result.snippet}
+            for result in results
+        ],
+    }
+
+
 async def generate_image_tool(context: ImageToolContext | None, prompt: str) -> dict:
     if context is None or context.image_provider is None:
         return {
@@ -83,6 +103,7 @@ async def run_turn(
     workspace: Path | None,
     logs_dir: Path,
     image_context: ImageToolContext | None = None,
+    search_client: SearchClient | None = None,
 ) -> AgentTurnOutcome:
     """Run model turns, auto-executing low-risk tool calls, until a final message
     or a medium-risk (confirmation-required) tool call is produced."""
@@ -115,6 +136,8 @@ async def run_turn(
         target = (
             str(call.arguments.get("prompt", ""))[:200]
             if call.name == "generate_image"
+            else str(call.arguments.get("query", ""))[:200]
+            if call.name == "web_search"
             else str(call.arguments.get("path", ""))
         )
         try:
@@ -122,6 +145,8 @@ async def run_turn(
                 outcome = list_directory(workspace, call.arguments.get("path", "."))
             elif call.name == "read_file":
                 outcome = read_file(workspace, target)
+            elif call.name == "web_search":
+                outcome = await web_search_tool(search_client, target)
             elif call.name == "generate_image":
                 outcome = await generate_image_tool(image_context, str(call.arguments.get("prompt", "")))
                 if "image_filename" in outcome:
@@ -155,6 +180,15 @@ async def resume_after_decision(
     workspace: Path | None,
     logs_dir: Path,
     image_context: ImageToolContext | None = None,
+    search_client: SearchClient | None = None,
 ) -> AgentTurnOutcome:
     working = [*messages, _proposal_message(call), _result_message(call, result_payload)]
-    return await run_turn(provider, model, working, workspace=workspace, logs_dir=logs_dir, image_context=image_context)
+    return await run_turn(
+        provider,
+        model,
+        working,
+        workspace=workspace,
+        logs_dir=logs_dir,
+        image_context=image_context,
+        search_client=search_client,
+    )

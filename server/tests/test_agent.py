@@ -6,6 +6,7 @@ from samida import agent
 from samida.providers.base import ChatTurnResult, ToolCallRequest
 from samida.providers.image_base import ImageGenerationResult
 from samida.schemas import ChatMessage
+from samida.search import SearchResult
 
 
 class _FakeStore:
@@ -104,3 +105,51 @@ async def test_run_turn_without_image_context_returns_friendly_error_in_tool_res
 
     assert outcome.image_filename is None
     assert outcome.message is not None
+
+
+class _FakeSearchClient:
+    async def search(self, query: str, limit: int = 5) -> list[SearchResult]:
+        return [SearchResult(title="SAMIDA", url="https://samida.dev", snippet="En personlig assistent.")]
+
+
+class _WebSearchThenFinalProvider:
+    """Works no matter which provider answers - the point of implementing
+    web_search as our own tool rather than a provider-hosted one."""
+
+    name = "anthropic"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def chat(self, messages: list[ChatMessage], model: str | None = None, tools: list[dict] | None = None) -> ChatTurnResult:
+        self.calls += 1
+        if self.calls == 1:
+            return ChatTurnResult(
+                resolved_model="test-model",
+                tool_call=ToolCallRequest(id="call-1", name="web_search", arguments={"query": "vad är samida"}),
+            )
+        return ChatTurnResult(resolved_model="test-model", message=ChatMessage(role="assistant", content="SAMIDA är en assistent."))
+
+
+@pytest.mark.asyncio
+async def test_run_turn_executes_web_search_regardless_of_provider(tmp_path: Path) -> None:
+    provider = _WebSearchThenFinalProvider()
+
+    outcome = await agent.run_turn(
+        provider,
+        "test-model",
+        [ChatMessage(role="user", content="Vad är SAMIDA?")],
+        workspace=None,
+        logs_dir=tmp_path,
+        search_client=_FakeSearchClient(),
+    )
+
+    assert outcome.message is not None
+    assert outcome.message.content == "SAMIDA är en assistent."
+    assert provider.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_web_search_tool_without_client_returns_friendly_error() -> None:
+    outcome = await agent.web_search_tool(None, "vad är samida")
+    assert outcome == {"error": "Web search is not configured on this server."}

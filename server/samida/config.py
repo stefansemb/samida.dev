@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     request_timeout_seconds: float = Field(default=120.0, gt=0)
     camofox_enabled: bool = True
     camofox_base_url: str = "http://127.0.0.1:9377"
+    searxng_base_url: str = "http://127.0.0.1:8888"
     project_root: Path = Path(__file__).resolve().parents[2]
     database_path: Path | None = None
     attachments_dir: Path | None = None
