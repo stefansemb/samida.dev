@@ -2,6 +2,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from samida.camofox import CamoFoxClient, CamoFoxError
 from samida.providers.base import ModelProvider, ProviderError, ToolCallRequest
 from samida.providers.image_base import ImageProvider
 from samida.schemas import ChatMessage
@@ -16,8 +17,19 @@ from samida.tools import (
     log_tool_call,
     read_file,
 )
+from samida.weather import WeatherClient, WeatherError
 
 MAX_TOOL_ITERATIONS = 4
+
+# Which argument identifies a low-risk tool call for logging/dedup purposes.
+_TARGET_ARG_BY_TOOL: dict[str, str] = {
+    "generate_image": "prompt",
+    "web_search": "query",
+    "fetch_page": "url",
+    "get_weather": "location",
+    "save_note": "content",
+    "recall_notes": "query",
+}
 
 
 @dataclass
@@ -29,6 +41,12 @@ class ImageToolContext:
 
     providers: list[tuple[ImageProvider, str]]
     store: ConversationStore
+
+
+@dataclass
+class NotesToolContext:
+    store: ConversationStore
+    user_id: str
 
 
 @dataclass
@@ -76,6 +94,70 @@ async def web_search_tool(client: SearchClient | None, query: str) -> dict:
     }
 
 
+MAX_FETCHED_PAGE_CHARS = 8_000
+
+
+async def fetch_page_tool(client: CamoFoxClient | None, url: str) -> dict:
+    if client is None:
+        return {"error": "Page fetching is not configured on this server."}
+    if not url.strip():
+        return {"error": "Please provide a URL."}
+    try:
+        content = await client.snapshot(url)
+    except CamoFoxError as exc:
+        return {"error": str(exc)}
+    truncated = content[:MAX_FETCHED_PAGE_CHARS]
+    return {"url": url, "content": truncated, "truncated": len(content) > MAX_FETCHED_PAGE_CHARS}
+
+
+async def weather_tool(client: WeatherClient | None, location: str) -> dict:
+    if client is None:
+        return {"error": "Weather lookup is not configured on this server."}
+    if not location.strip():
+        return {"error": "Please provide a city or place name."}
+    try:
+        result = await client.forecast(location)
+    except WeatherError as exc:
+        return {"error": str(exc)}
+    return {
+        "location": result.location_name,
+        "forecast": [
+            {
+                "date": day.date,
+                "condition": day.condition,
+                "temperature_min": day.temperature_min,
+                "temperature_max": day.temperature_max,
+                "precipitation_probability_max": day.precipitation_probability_max,
+            }
+            for day in result.days
+        ],
+    }
+
+
+async def save_note_tool(context: NotesToolContext | None, content: str) -> dict:
+    if context is None:
+        return {"error": "Notes are not available right now."}
+    if not content.strip():
+        return {"error": "Please provide the note's content."}
+    note = context.store.save_note(context.user_id, content)
+    return {"saved": True, "note_id": note["id"]}
+
+
+async def recall_notes_tool(context: NotesToolContext | None, query: str) -> dict:
+    if context is None:
+        return {"error": "Notes are not available right now."}
+    notes = context.store.list_notes(context.user_id, query or None)
+    if not notes and query:
+        # The keyword is a literal substring match, so it misses paraphrases,
+        # translations, or plurals (e.g. a note saved in English won't match
+        # a Swedish query). Fall back to the recent list so the model can
+        # judge relevance itself instead of reporting a false "not found".
+        notes = context.store.list_notes(context.user_id)
+    if not notes:
+        return {"notes": [], "message": "No notes saved yet."}
+    return {"notes": [{"content": note["content"], "created_at": note["created_at"]} for note in notes]}
+
+
 async def generate_image_tool(context: ImageToolContext | None, prompt: str) -> dict:
     if context is None or not context.providers:
         return {
@@ -110,6 +192,9 @@ async def run_turn(
     logs_dir: Path,
     image_context: ImageToolContext | None = None,
     search_client: SearchClient | None = None,
+    camofox_client: CamoFoxClient | None = None,
+    weather_client: WeatherClient | None = None,
+    notes_context: NotesToolContext | None = None,
 ) -> AgentTurnOutcome:
     """Run model turns, auto-executing low-risk tool calls, until a final message
     or a medium-risk (confirmation-required) tool call is produced."""
@@ -139,22 +224,26 @@ async def run_turn(
             )
 
         working.append(_proposal_message(call))
-        target = (
-            str(call.arguments.get("prompt", ""))[:200]
-            if call.name == "generate_image"
-            else str(call.arguments.get("query", ""))[:200]
-            if call.name == "web_search"
-            else str(call.arguments.get("path", ""))
-        )
+        arg_key = _TARGET_ARG_BY_TOOL.get(call.name, "path")
+        arg_value = str(call.arguments.get(arg_key, ""))
+        target = arg_value[:200]  # only for logging - tool calls below use the full arg_value
         try:
             if call.name == "list_directory":
                 outcome = list_directory(workspace, call.arguments.get("path", "."))
             elif call.name == "read_file":
-                outcome = read_file(workspace, target)
+                outcome = read_file(workspace, arg_value)
             elif call.name == "web_search":
-                outcome = await web_search_tool(search_client, target)
+                outcome = await web_search_tool(search_client, arg_value)
+            elif call.name == "fetch_page":
+                outcome = await fetch_page_tool(camofox_client, arg_value)
+            elif call.name == "get_weather":
+                outcome = await weather_tool(weather_client, arg_value)
+            elif call.name == "save_note":
+                outcome = await save_note_tool(notes_context, arg_value)
+            elif call.name == "recall_notes":
+                outcome = await recall_notes_tool(notes_context, arg_value)
             elif call.name == "generate_image":
-                outcome = await generate_image_tool(image_context, str(call.arguments.get("prompt", "")))
+                outcome = await generate_image_tool(image_context, arg_value)
                 if "image_filename" in outcome:
                     generated_image_filename = outcome["image_filename"]
             else:
@@ -187,6 +276,9 @@ async def resume_after_decision(
     logs_dir: Path,
     image_context: ImageToolContext | None = None,
     search_client: SearchClient | None = None,
+    camofox_client: CamoFoxClient | None = None,
+    weather_client: WeatherClient | None = None,
+    notes_context: NotesToolContext | None = None,
 ) -> AgentTurnOutcome:
     working = [*messages, _proposal_message(call), _result_message(call, result_payload)]
     return await run_turn(
@@ -197,4 +289,7 @@ async def resume_after_decision(
         logs_dir=logs_dir,
         image_context=image_context,
         search_client=search_client,
+        camofox_client=camofox_client,
+        weather_client=weather_client,
+        notes_context=notes_context,
     )

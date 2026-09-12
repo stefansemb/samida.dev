@@ -135,6 +135,13 @@ class ConversationStore:
                     enabled INTEGER NOT NULL DEFAULT 1,
                     UNIQUE (kind, provider_key, model_name)
                 );
+                CREATE TABLE IF NOT EXISTS notes (
+                    id TEXT PRIMARY KEY,
+                    owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_notes_owner_created ON notes(owner_id, created_at DESC);
                 PRAGMA optimize;
                 """
             )
@@ -366,6 +373,31 @@ class ConversationStore:
             cursor = connection.execute("DELETE FROM reminders WHERE id=? AND owner_id=?", (reminder_id, owner_id))
         if cursor.rowcount == 0:
             raise NotFoundError("The reminder does not exist.")
+
+    def save_note(self, owner_id: str, content: str) -> dict:
+        item = {"id": str(uuid4()), "content": content.strip(), "created_at": _now()}
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO notes (id, owner_id, content, created_at) VALUES (?, ?, ?, ?)",
+                (item["id"], owner_id, item["content"], item["created_at"]),
+            )
+        return item
+
+    def list_notes(self, owner_id: str, query: str | None = None, limit: int = 20) -> list[dict]:
+        with self._connect() as connection:
+            if query:
+                rows = connection.execute(
+                    "SELECT id, content, created_at FROM notes WHERE owner_id = ? "
+                    "AND content LIKE ? ORDER BY created_at DESC LIMIT ?",
+                    (owner_id, f"%{query}%", limit),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT id, content, created_at FROM notes WHERE owner_id = ? "
+                    "ORDER BY created_at DESC LIMIT ?",
+                    (owner_id, limit),
+                ).fetchall()
+        return [dict(row) for row in rows]
 
     def list_research_reports(self, owner_id: str, research_type: str = "ai_general") -> list[dict]:
         with self._connect() as connection:

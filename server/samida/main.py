@@ -23,8 +23,9 @@ from samida.providers.registry import CHAT_PROVIDER_SPECS, IMAGE_PROVIDER_SPECS
 from samida.ocr import OcrService
 from samida.research import run_research
 from samida.camofox import CamoFoxClient
-from samida.dependencies import get_camofox_client, get_search_client
+from samida.dependencies import get_camofox_client, get_search_client, get_weather_client
 from samida.search import SearchClient
+from samida.weather import WeatherClient
 from samida.schemas import (
     ChatMessage,
     ChatRequest,
@@ -504,6 +505,8 @@ async def conversation_chat(
     store: ConversationStore = Depends(get_conversation_store),
     ocr: OcrService = Depends(get_ocr_service),
     search_client: SearchClient = Depends(get_search_client),
+    camofox: CamoFoxClient | None = Depends(get_camofox_client),
+    weather_client: WeatherClient = Depends(get_weather_client),
     settings: Settings = Depends(get_settings),
     user: auth.User = Depends(auth.get_current_user),
 ) -> ConversationChatResponse:
@@ -553,6 +556,7 @@ async def conversation_chat(
         workspace = _resolve_workspace(request.working_directory)
         image_providers = await image_factory.build_fallback_chain()
         image_context = agent.ImageToolContext(providers=image_providers, store=store)
+        notes_context = agent.NotesToolContext(store=store, user_id=user.id)
         turn = await agent.run_turn(
             provider,
             resolved_model,
@@ -566,6 +570,9 @@ async def conversation_chat(
             logs_dir=settings.resolved_logs_dir(),
             image_context=image_context,
             search_client=search_client,
+            camofox_client=camofox,
+            weather_client=weather_client,
+            notes_context=notes_context,
         )
 
         pending_tool_call: PendingToolCall | None = None
@@ -670,6 +677,8 @@ async def approve_tool_call(
     context_builder: ContextBuilder = Depends(get_context_builder),
     store: ConversationStore = Depends(get_conversation_store),
     search_client: SearchClient = Depends(get_search_client),
+    camofox: CamoFoxClient | None = Depends(get_camofox_client),
+    weather_client: WeatherClient = Depends(get_weather_client),
     settings: Settings = Depends(get_settings),
     user: auth.User = Depends(auth.get_current_user),
 ) -> ToolCallDecisionResponse:
@@ -682,6 +691,8 @@ async def approve_tool_call(
         context_builder=context_builder,
         store=store,
         search_client=search_client,
+        camofox=camofox,
+        weather_client=weather_client,
         settings=settings,
         owner_id=user.id,
     )
@@ -699,6 +710,8 @@ async def reject_tool_call(
     context_builder: ContextBuilder = Depends(get_context_builder),
     store: ConversationStore = Depends(get_conversation_store),
     search_client: SearchClient = Depends(get_search_client),
+    camofox: CamoFoxClient | None = Depends(get_camofox_client),
+    weather_client: WeatherClient = Depends(get_weather_client),
     settings: Settings = Depends(get_settings),
     user: auth.User = Depends(auth.get_current_user),
 ) -> ToolCallDecisionResponse:
@@ -711,6 +724,8 @@ async def reject_tool_call(
         context_builder=context_builder,
         store=store,
         search_client=search_client,
+        camofox=camofox,
+        weather_client=weather_client,
         settings=settings,
         owner_id=user.id,
     )
@@ -726,6 +741,8 @@ async def _resolve_tool_call(
     context_builder: ContextBuilder,
     store: ConversationStore,
     search_client: SearchClient,
+    camofox: CamoFoxClient | None,
+    weather_client: WeatherClient,
     settings: Settings,
     owner_id: str,
 ) -> ToolCallDecisionResponse:
@@ -767,6 +784,7 @@ async def _resolve_tool_call(
         provider, _resolved = await factory.build(record["provider"], record["model"])
         image_providers = await image_factory.build_fallback_chain()
         image_context = agent.ImageToolContext(providers=image_providers, store=store)
+        notes_context = agent.NotesToolContext(store=store, user_id=owner_id)
 
         turn = await agent.resume_after_decision(
             provider,
@@ -778,6 +796,9 @@ async def _resolve_tool_call(
             logs_dir=settings.resolved_logs_dir(),
             image_context=image_context,
             search_client=search_client,
+            camofox_client=camofox,
+            weather_client=weather_client,
+            notes_context=notes_context,
         )
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

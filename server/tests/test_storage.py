@@ -168,3 +168,28 @@ def test_messages_expose_tool_call_placeholder(store: ConversationStore, owner_i
 
     user_message = next(m for m in messages if m["role"] == "user")
     assert user_message["tool_call"] is None
+
+
+def test_notes_are_saved_and_recalled_newest_first(store: ConversationStore, owner_id: str) -> None:
+    store.save_note(owner_id, "Köp mjölk")
+    store.save_note(owner_id, "Ring mamma imorgon")
+
+    notes = store.list_notes(owner_id)
+
+    assert [note["content"] for note in notes] == ["Ring mamma imorgon", "Köp mjölk"]
+
+
+def test_notes_can_be_filtered_by_keyword(store: ConversationStore, owner_id: str) -> None:
+    store.save_note(owner_id, "Köp mjölk")
+    store.save_note(owner_id, "Ring mamma imorgon")
+
+    notes = store.list_notes(owner_id, query="mamma")
+
+    assert [note["content"] for note in notes] == ["Ring mamma imorgon"]
+
+
+def test_notes_are_scoped_to_their_owner(store: ConversationStore, owner_id: str) -> None:
+    other_owner_id = store.create_user("other@example.com", "hash")["id"]
+    store.save_note(owner_id, "Hemlig anteckning")
+
+    assert store.list_notes(other_owner_id) == []

@@ -9,6 +9,7 @@ from samida.providers import ImageProvider, ModelProvider, OllamaProvider, Provi
 from samida.providers.registry import CHAT_PROVIDER_SPECS, IMAGE_PROVIDER_PREFERENCE, IMAGE_PROVIDER_SPECS
 from samida.search import SearchClient
 from samida.storage import ConversationStore
+from samida.weather import WeatherClient
 
 
 @lru_cache
@@ -139,3 +140,8 @@ def get_camofox_client() -> CamoFoxClient | None:
 def get_search_client() -> SearchClient:
     settings = get_settings()
     return SearchClient(settings.searxng_base_url, settings.request_timeout_seconds)
+
+
+@lru_cache
+def get_weather_client() -> WeatherClient:
+    return WeatherClient(get_settings().request_timeout_seconds)

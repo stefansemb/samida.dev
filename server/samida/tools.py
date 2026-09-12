@@ -41,6 +41,69 @@ GENERAL_TOOL_SPECS: list[dict] = [
             "required": ["prompt"],
         },
     },
+    {
+        "name": "fetch_page",
+        "description": (
+            "Fetch the full text content of a specific public webpage URL. Use this after "
+            "web_search to read a page in full, or when the user gives you a link directly."
+        ),
+        "risk": "low",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The full https URL of the page to read.",
+                },
+            },
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "get_weather",
+        "description": "Get the current multi-day weather forecast for a city or place.",
+        "risk": "low",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "location": {
+                    "type": "string",
+                    "description": "City or place name, e.g. 'Göteborg' or 'Paris, France'.",
+                },
+            },
+            "required": ["location"],
+        },
+    },
+    {
+        "name": "save_note",
+        "description": "Save a short personal note for the user to recall later, in any conversation.",
+        "risk": "low",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "The note's text content.",
+                },
+            },
+            "required": ["content"],
+        },
+    },
+    {
+        "name": "recall_notes",
+        "description": "Recall the user's previously saved notes, optionally filtered by a keyword.",
+        "risk": "low",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Optional keyword to filter notes by. Leave empty to list the most recent notes.",
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 WORKSPACE_TOOL_SPECS: list[dict] = [
