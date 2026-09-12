@@ -794,7 +794,7 @@ export default function Home() {
       </section>}
 
       <aside className="context-panel">
-        <section className="context-card priority-card"><div className="panel-heading"><Circle size={9} fill="currentColor" /><h3>Active priorities</h3></div><div className="priority-content">{(priorities || 'No priorities set.').split('\n').filter((line) => line.trim() && !line.startsWith('#')).map((line) => <p key={line}>{line.replace(/^- \[[ xX]\]\s*/, '').replace(/^\d+\.\s*/, '')}</p>)}</div></section>
+        <section className="context-card priority-card"><div className="panel-heading"><Circle size={9} fill="currentColor" /><h3>{currentUser?.is_owner ? 'Active priorities' : 'What SAMIDA can do'}</h3></div><div className="priority-content">{(priorities || 'No priorities set.').split('\n').filter((line) => line.trim() && !line.startsWith('#')).map((line) => <p key={line}>{line.replace(/^- \[[ xX]\]\s*/, '').replace(/^\d+\.\s*/, '')}</p>)}</div></section>
         <section className="usage-card">
           <div className="panel-heading"><Gauge size={18} /><h3>Usage</h3></div>
           <dl className="status-list usage-list">
