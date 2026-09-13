@@ -1,0 +1,16 @@
+{
+  "name": "samida-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SAMIDA Desktop - runs the assistant fully locally, no server or account needed.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "38.5.0"
+  },
+  "allowScripts": {
+    "electron@38.5.0": true
+  }
+}

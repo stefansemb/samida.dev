@@ -151,6 +151,11 @@ declare global {
       ): void | Promise<void>;
     };
   }
+  interface Window {
+    readonly samidaDesktop?: {
+      pickFolder(): Promise<string | null>;
+    };
+  }
 }
 
 const DEFAULT_MODEL = 'anthropic:claude-haiku-4-5';
@@ -546,6 +551,11 @@ export default function Home() {
   async function pickWorkspace() {
     setPickingWorkspace(true);
     try {
+      if (window.samidaDesktop) {
+        const path = await window.samidaDesktop.pickFolder();
+        if (path) setWorkingDirectory(path);
+        return;
+      }
       const result = await requestJson<{ path: string | null }>('/api/workspace/pick', { method: 'POST' });
       if (result.path) setWorkingDirectory(result.path);
     } catch (caught) {
@@ -817,6 +827,11 @@ export default function Home() {
                 <SelectValue>{(value: string) => modelLabel(value)}</SelectValue>
               </SelectTrigger>
               <SelectContent>
+                {selectableModels.length === 0 && (
+                  <SelectItem disabled value="__no_models__">
+                    No models yet — add an API key under Settings
+                  </SelectItem>
+                )}
                 {selectableModels.map((model) => (
                   <SelectItem key={model} value={model}>
                     {modelLabel(model)}
