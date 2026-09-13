@@ -144,8 +144,14 @@ class OpenAIProvider(ModelProvider):
             }
         text_type = "output_text" if message.role == "assistant" else "input_text"
         content: list[dict] = [{"type": text_type, "text": message.content}]
-        content.extend(
-            {"type": "input_image", "image_url": _as_data_uri(image)}
-            for image in message.images
-        )
+        if message.role != "assistant":
+            # The Responses API only allows output_text/refusal content on
+            # assistant-role turns - no image type at all. A prior assistant
+            # turn can carry .images here (e.g. a generate_image result
+            # reattached on reload, see storage.py's model_messages()), but
+            # replaying it as input_image would be rejected by the API.
+            content.extend(
+                {"type": "input_image", "image_url": _as_data_uri(image)}
+                for image in message.images
+            )
         return {"role": message.role, "content": content}
