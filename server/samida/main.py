@@ -257,7 +257,7 @@ GOOGLE_OAUTH_STATE_COOKIE = "samida_google_oauth_state"
 
 
 def _google_redirect_uri(settings: Settings) -> str:
-    return f"{settings.public_base_url.rstrip('/')}/api/integrations/google/callback"
+    return f"{settings.resolved_google_oauth_base_url()}/api/integrations/google/callback"
 
 
 @app.get("/api/integrations/google/status", response_model=GoogleIntegrationStatus)

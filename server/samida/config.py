@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     google_client_id: str | None = None
     google_client_secret: str | None = None
     public_base_url: str = "http://localhost:3000"
+    google_oauth_base_url: str | None = None
     owner_email: str | None = None
     project_root: Path = Path(__file__).resolve().parents[2]
     database_path: Path | None = None
@@ -62,6 +63,15 @@ class Settings(BaseSettings):
 
     def resolved_cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.cors_extra_origins.split(",") if origin.strip()]
+
+    def resolved_google_oauth_base_url(self) -> str:
+        # The Google OAuth callback route (/api/integrations/google/callback)
+        # is served by this backend, not by public_base_url's frontend - the
+        # two happen to be the same origin in production only because Caddy
+        # reverse-proxies /api/* there. Anywhere frontend and backend run on
+        # separate ports with no such proxy (local dev, the Desktop app),
+        # this must be overridden to the backend's own reachable URL.
+        return (self.google_oauth_base_url or self.public_base_url).rstrip("/")
 
 
 @lru_cache
