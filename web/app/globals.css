@@ -292,8 +292,6 @@ button, textarea { font: inherit; }
 .reminder-item { display:flex; justify-content:space-between; gap:12px; align-items:center; padding:13px 0; border-top:1px solid var(--border-soft); color: var(--text-secondary); }
 .reminder-item small { display:block; margin-top:4px; color: var(--text-muted); }
 .priority-content { color: var(--text-secondary); font-size:.78rem; line-height:1.5; overflow-wrap:anywhere; }
-.priority-card { max-height: 340px; overflow: hidden; }
-.priority-card .priority-content { max-height: 270px; overflow-y: auto; padding-right: 6px; }
 .priority-content p { margin: 0 0 10px; }
 
 .auth-page { display: grid; place-items: center; min-height: 100vh; padding: 24px; background: var(--bg-app); }
