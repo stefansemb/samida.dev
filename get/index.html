@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SAMIDA</title>
+<meta name="description" content="A local-first AI assistant that runs on your own machine — chat with Ollama, Claude, or GPT, read your calendar and email, edit files, and keep every memory in Markdown you own." />
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M22 19.27C22 20.78 20.78 22 19.27 22H14.73C13.22 22 12 20.78 12 19.27V12H19.27C20.78 12 22 13.22 22 14.73V19.27Z' fill='%2368C4FF'/%3E%3Cpath d='M20 2C21.1 2 22 2.9 22 4V7C22 8.1 21.1 9 20 9H17C15.9 9 15 8.1 15 7V4C15 2.9 15.9 2 17 2H20Z' fill='%230C79D8'/%3E%3Cpath d='M7 15C8.1 15 9 15.9 9 17V20C9 21.1 8.1 22 7 22H4C2.9 22 2 21.1 2 20V17C2 15.9 2.9 15 4 15H7Z' fill='%230C79D8'/%3E%3Cpath d='M12 12H4.73C3.22 12 2 10.78 2 9.27V4.73C2 3.22 3.22 2 4.73 2H9.27C10.78 2 12 3.22 12 4.73V12Z' fill='%232E9EFF'/%3E%3C/svg%3E" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+
+  /* ============ TOKENS — shared brand with samida.dev, page-specific terminal surface ============ */
+  :root {
+    --bg: #171717;
+    --surface: #1c1b1a;
+    --surface-2: #232220;
+    --border: #34322e;
+    --border-soft: #262523;
+    --ink: #ede9e3;
+    --ink-dim: #a9a297;
+    --ink-faint: #726b5f;
+    --accent: #eb7136;
+    --accent-2: #68c4ff;
+    --accent-ink: #1a1410;
+    --accent-soft: rgba(235, 113, 54, 0.14);
+    --good: #4ade80;
+    --danger: #f0a3a7;
+
+    /* the "device screen" the hero chat mockup sits on - cooler/darker than
+       --surface on purpose, and fixed (not redefined in the light-mode
+       blocks below) since it should always read as a dark terminal
+       regardless of page theme. Its own text tokens (--screen-ink*) stay
+       fixed alongside it for the same reason - using the theme-flipping
+       --ink tokens here would go dark-on-dark in light mode. */
+    --screen: #0c0c0b;
+    --screen-border: #2a2825;
+    --bubble-user: #232220;
+    --bubble-user-border: #37342f;
+    --screen-ink: #ede9e3;
+    --screen-ink-dim: #b8b2a7;
+    --screen-ink-faint: #726b5f;
+    --screen-accent-2: #68c4ff;
+
+    --font-display: "Bricolage Grotesque", "Hanken Grotesk", system-ui, sans-serif;
+    --font-body: "IBM Plex Sans", -apple-system, "Segoe UI", sans-serif;
+    --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="light"]) {
+      --bg: #faf6f1;
+      --surface: #ffffff;
+      --surface-2: #f4eee5;
+      --border: #e6dccc;
+      --border-soft: #ede5d8;
+      --ink: #241f18;
+      --ink-dim: #6c6153;
+      --ink-faint: #948972;
+      --accent: #c85a1c;
+      --accent-2: #0c79d8;
+      --accent-ink: #fffaf5;
+      --accent-soft: rgba(200, 90, 28, 0.1);
+      --good: #16824a;
+      --danger: #b3261e;
+      --screen: #17130f;
+      --screen-border: #2c261d;
+      --bubble-user: #221c15;
+      --bubble-user-border: #3a3024;
+    }
+  }
+
+  :root[data-theme="light"] {
+    --bg: #faf6f1;
+    --surface: #ffffff;
+    --surface-2: #f4eee5;
+    --border: #e6dccc;
+    --border-soft: #ede5d8;
+    --ink: #241f18;
+    --ink-dim: #6c6153;
+    --ink-faint: #948972;
+    --accent: #c85a1c;
+    --accent-2: #0c79d8;
+    --accent-ink: #fffaf5;
+    --accent-soft: rgba(200, 90, 28, 0.1);
+    --good: #16824a;
+    --danger: #b3261e;
+    --screen: #17130f;
+    --screen-border: #2c261d;
+    --bubble-user: #221c15;
+    --bubble-user-border: #3a3024;
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #171717;
+    --surface: #1c1b1a;
+    --surface-2: #232220;
+    --border: #34322e;
+    --border-soft: #262523;
+    --ink: #ede9e3;
+    --ink-dim: #a9a297;
+    --ink-faint: #726b5f;
+    --accent: #eb7136;
+    --accent-2: #68c4ff;
+    --accent-ink: #1a1410;
+    --accent-soft: rgba(235, 113, 54, 0.14);
+    --good: #4ade80;
+    --danger: #f0a3a7;
+    --screen: #0c0c0b;
+    --screen-border: #2a2825;
+    --bubble-user: #232220;
+    --bubble-user-border: #37342f;
+  }
+
+  /* ============ BASE ============ */
+  * { box-sizing: border-box; }
+  html { color-scheme: dark light; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3 {
+    font-family: var(--font-display);
+    font-weight: 700;
+    line-height: 1.06;
+    text-wrap: balance;
+    margin: 0;
+    color: var(--ink);
+  }
+
+  p { margin: 0; }
+  a { color: inherit; }
+  img { max-width: 100%; }
+
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .wrap {
+    max-width: 1160px;
+    margin: 0 auto;
+    padding-inline: clamp(20px, 5vw, 56px);
+  }
+
+  ::selection { background: var(--accent-soft); color: var(--ink); }
+
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+
+  /* ============ NAV ============ */
+  header.site {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: color-mix(in srgb, var(--bg) 86%, transparent);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border-soft);
+  }
+
+  .nav-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-block: 16px;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 17px;
+    letter-spacing: 0.01em;
+    text-decoration: none;
+  }
+
+  .brand .mark { width: 26px; height: 26px; flex-shrink: 0; display: block; }
+
+  nav.links { display: flex; align-items: center; gap: 28px; font-size: 14.5px; font-weight: 500; }
+  nav.links a { text-decoration: none; color: var(--ink-dim); transition: color .15s ease; }
+  nav.links a:hover { color: var(--ink); }
+
+  .nav-cta {
+    font-family: var(--font-body);
+    font-size: 13.5px;
+    font-weight: 600;
+    padding: 8px 15px;
+    border-radius: 8px;
+    background: var(--accent);
+    color: var(--accent-ink);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .nav-cta:hover { background: color-mix(in srgb, var(--accent) 88%, white 12%); }
+
+  /* ============ HERO ============ */
+  .hero { padding-block: clamp(52px, 8vw, 88px) clamp(60px, 8vw, 92px); }
+
+  .hero-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: clamp(36px, 5vw, 64px);
+    align-items: center;
+  }
+
+  .hero h1 { font-size: clamp(36px, 4.6vw, 54px); letter-spacing: -0.01em; }
+  .hero h1 em { font-style: normal; color: var(--accent); }
+
+  .hero .lede {
+    margin-top: 20px;
+    max-width: 48ch;
+    font-size: 17.5px;
+    color: var(--ink-dim);
+    line-height: 1.65;
+  }
+
+  .hero-actions { display: flex; gap: 12px; margin-top: 30px; flex-wrap: wrap; align-items: center; }
+
+  .btn {
+    font-family: var(--font-body);
+    font-size: 14.5px;
+    font-weight: 600;
+    padding: 12px 21px;
+    border-radius: 9px;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    transition: transform .15s ease, background .15s ease, border-color .15s ease;
+    border: 1px solid transparent;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn-primary { background: var(--accent); color: var(--accent-ink); }
+  .btn-primary:hover { background: color-mix(in srgb, var(--accent) 88%, white 12%); }
+  .btn-ghost { background: transparent; border-color: var(--border); color: var(--ink); }
+  .btn-ghost:hover { border-color: var(--accent); }
+
+  .hero-meta {
+    margin-top: 14px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--ink-faint);
+    letter-spacing: 0.02em;
+  }
+
+  /* ---- hero device: a real mock of the chat UI, not a screenshot ---- */
+  .device {
+    background: var(--screen);
+    border: 1px solid var(--screen-border);
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 30px 60px -30px rgba(0,0,0,0.55);
+  }
+
+  .device-bar {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--screen-border);
+  }
+  .device-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border); }
+  .device-title {
+    margin-left: 6px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--screen-ink-faint);
+  }
+  .device-status {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--good);
+  }
+  .device-status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 20%, transparent); }
+
+  .device-thread { padding: 20px 18px; display: grid; gap: 16px; }
+
+  .bubble { max-width: 84%; font-size: 13.5px; line-height: 1.55; }
+  .bubble-user {
+    margin-left: auto;
+    background: var(--bubble-user);
+    border: 1px solid var(--bubble-user-border);
+    color: var(--screen-ink);
+    padding: 9px 13px;
+    border-radius: 11px 3px 11px 11px;
+  }
+  .bubble-assistant { color: var(--screen-ink); }
+  .bubble-assistant .who {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--screen-accent-2);
+    margin-bottom: 5px;
+    display: block;
+  }
+
+  .tool-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 8px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--screen-ink-faint);
+    border: 1px solid var(--screen-border);
+    border-radius: 99px;
+    padding: 3px 9px;
+  }
+  .tool-chip::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--good); }
+
+  .device-composer {
+    border-top: 1px solid var(--screen-border);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .composer-input {
+    font-family: var(--font-body);
+    font-size: 13px;
+    color: var(--screen-ink-faint);
+    padding: 9px 12px;
+    border: 1px solid var(--screen-border);
+    border-radius: 9px;
+  }
+  .composer-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .composer-pills { display: flex; gap: 6px; font-family: var(--font-mono); font-size: 10.5px; color: var(--screen-ink-faint); }
+  .composer-pills span { border: 1px solid var(--screen-border); border-radius: 99px; padding: 3px 9px; }
+  .composer-send {
+    width: 28px; height: 28px; border-radius: 8px;
+    background: var(--accent); flex-shrink: 0;
+  }
+
+  /* ============ SECTIONS ============ */
+  section { padding-block: clamp(52px, 7vw, 84px); }
+  section + section { border-top: 1px solid var(--border-soft); }
+
+  .section-head { margin-bottom: clamp(30px, 4vw, 44px); }
+  .section-head .eyebrow { display: block; margin-bottom: 10px; }
+  .section-head h2 { font-size: clamp(26px, 3.2vw, 34px); max-width: 20ch; }
+  .section-head .sub { margin-top: 12px; max-width: 54ch; color: var(--ink-dim); font-size: 15.5px; line-height: 1.6; }
+
+  /* ---- capabilities ---- */
+  .cap-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px;
+    background: var(--border-soft);
+    border: 1px solid var(--border-soft);
+    border-radius: 16px;
+    overflow: hidden;
+  }
+
+  .cap {
+    background: var(--surface);
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .cap .icon {
+    width: 30px; height: 30px;
+    display: grid; place-items: center;
+    border-radius: 8px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .cap h3 { font-size: 16px; font-weight: 650; margin-top: 4px; }
+  .cap p { color: var(--ink-dim); font-size: 14px; line-height: 1.6; }
+  .cap .note {
+    margin-top: auto;
+    padding-top: 8px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--ink-faint);
+    border-top: 1px dashed var(--border-soft);
+  }
+
+  /* ---- two paths ---- */
+  .paths { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+
+  .path-card {
+    background: var(--surface);
+    border: 1px solid var(--border-soft);
+    border-radius: 16px;
+    padding: 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .path-card.featured {
+    border-color: color-mix(in srgb, var(--accent) 35%, var(--border-soft));
+    background: linear-gradient(160deg, var(--surface) 55%, color-mix(in srgb, var(--accent) 7%, var(--surface)));
+  }
+
+  .path-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .path-card h3 { font-size: 21px; }
+  .path-tag {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 3px 9px;
+    border-radius: 99px;
+    white-space: nowrap;
+    color: var(--accent);
+    background: var(--accent-soft);
+  }
+
+  .path-card p.desc { color: var(--ink-dim); font-size: 14.5px; line-height: 1.62; }
+
+  .path-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 9px; font-size: 13.5px; color: var(--ink-dim); }
+  .path-list li { display: flex; gap: 9px; align-items: baseline; }
+  .path-list li::before { content: "—"; color: var(--ink-faint); flex-shrink: 0; }
+
+  .path-card .btn { margin-top: auto; align-self: flex-start; }
+
+  /* ---- memory strip ---- */
+  .memory-strip {
+    display: grid;
+    grid-template-columns: 1.1fr 0.9fr;
+    gap: clamp(32px, 5vw, 56px);
+    align-items: center;
+  }
+
+  .memory-body p { font-size: 16.5px; color: var(--ink-dim); line-height: 1.7; max-width: 52ch; }
+  .memory-body p + p { margin-top: 14px; }
+  .memory-body strong { color: var(--ink); font-weight: 600; }
+
+  .memory-file {
+    background: var(--screen);
+    border: 1px solid var(--screen-border);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .memory-file-head {
+    padding: 11px 16px;
+    border-bottom: 1px solid var(--screen-border);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--screen-ink-faint);
+  }
+  .memory-file pre {
+    margin: 0;
+    padding: 16px;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    line-height: 1.7;
+    color: var(--screen-ink-dim);
+    overflow-x: auto;
+    white-space: pre-wrap;
+  }
+  .memory-file pre .h { color: var(--screen-accent-2); }
+  .memory-file pre .d { color: var(--screen-ink-faint); }
+
+  /* ============ FOOTER ============ */
+  footer.site { padding-block: 36px 44px; border-top: 1px solid var(--border-soft); }
+  .footer-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+  .footer-row .brand { font-size: 14.5px; }
+  .footer-row .brand .mark { width: 20px; height: 20px; }
+  .foot-links { font-family: var(--font-mono); font-size: 12.5px; color: var(--ink-faint); display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
+  .foot-links a { text-decoration: none; color: var(--ink-faint); }
+  .foot-links a:hover { color: var(--ink); }
+
+  /* ============ RESPONSIVE ============ */
+  @media (max-width: 900px) {
+    .hero-grid { grid-template-columns: 1fr; }
+    .device { max-width: 460px; margin-inline: auto; }
+    .cap-grid { grid-template-columns: 1fr 1fr; }
+    .paths { grid-template-columns: 1fr; }
+    .memory-strip { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 640px) {
+    nav.links { display: none; }
+    .cap-grid { grid-template-columns: 1fr; }
+  }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+</style>
+</head>
+<body>
+
+  <header class="site">
+    <div class="wrap nav-row">
+      <a class="brand" href="#top">
+        <svg class="mark" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M22 19.27C22 20.78 20.78 22 19.27 22H14.73C13.22 22 12 20.78 12 19.27V12H19.27C20.78 12 22 13.22 22 14.73V19.27Z" fill="#68C4FF"/>
+          <path d="M20 2C21.1 2 22 2.9 22 4V7C22 8.1 21.1 9 20 9H17C15.9 9 15 8.1 15 7V4C15 2.9 15.9 2 17 2H20Z" fill="#0C79D8"/>
+          <path d="M7 15C8.1 15 9 15.9 9 17V20C9 21.1 8.1 22 7 22H4C2.9 22 2 21.1 2 20V17C2 15.9 2.9 15 4 15H7Z" fill="#0C79D8"/>
+          <path d="M12 12H4.73C3.22 12 2 10.78 2 9.27V4.73C2 3.22 3.22 2 4.73 2H9.27C10.78 2 12 3.22 12 4.73V12Z" fill="#2E9EFF"/>
+        </svg>
+        SAMIDA
+      </a>
+      <nav class="links" aria-label="Primary">
+        <a href="#capabilities">Capabilities</a>
+        <a href="#install">Install</a>
+        <a href="#memory">Memory</a>
+      </nav>
+      <a class="nav-cta" href="https://github.com/stefansemb/samida.dev/releases/latest/download/SAMIDA-Setup.exe">Download</a>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="wrap hero-grid">
+        <div>
+          <div class="eyebrow">Local-first AI assistant</div>
+          <h1 style="margin-top:14px;">An assistant that answers to <em>you</em>, not a subscription.</h1>
+          <p class="lede">SAMIDA runs on your own machine, talks to Ollama, Claude, or GPT interchangeably, and only touches your files, calendar, or inbox when you've explicitly let it. No account required for the desktop app — your memory stays in Markdown files you can read yourself.</p>
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="https://github.com/stefansemb/samida.dev/releases/latest/download/SAMIDA-Setup.exe">Download for Windows</a>
+            <a class="btn btn-ghost" href="https://app.samida.dev">Try it in your browser →</a>
+          </div>
+          <div class="hero-meta">Windows · no Python or Node required · auto-updates</div>
+        </div>
+
+        <div class="device" aria-hidden="true">
+          <div class="device-bar">
+            <span class="device-dot"></span><span class="device-dot"></span><span class="device-dot"></span>
+            <span class="device-title">SAMIDA</span>
+            <span class="device-status"><span class="device-status-dot"></span>Connected</span>
+          </div>
+          <div class="device-thread">
+            <div class="bubble bubble-user">What's on my calendar today, and pull up anything unread from my boss</div>
+            <div class="bubble bubble-assistant">
+              <span class="who">SAMIDA</span>
+              You've got a 14:00 sync with the design team and nothing else. One unread from Lena, subject "Friday deploy window" — sent 40 minutes ago.
+              <div class="tool-chip">list_calendar_events</div>
+              <div class="tool-chip">list_recent_emails</div>
+            </div>
+          </div>
+          <div class="device-composer">
+            <div class="composer-input">Type a message or paste a screenshot…</div>
+            <div class="composer-row">
+              <div class="composer-pills"><span>Claude · haiku-4-5</span><span>minimal</span></div>
+              <span class="composer-send" aria-hidden="true"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="capabilities">
+      <div class="wrap">
+        <div class="section-head">
+          <span class="eyebrow">Capabilities</span>
+          <h2>Only the tools it asks to use</h2>
+          <p class="sub">Every tool call shows up in the chat as it happens — nothing runs silently in the background.</p>
+        </div>
+        <div class="cap-grid">
+          <article class="cap">
+            <span class="icon">✦</span>
+            <h3>Three model providers, one interface</h3>
+            <p>Switch between a local Ollama model, Claude, or GPT mid-conversation — no re-setup, no lock-in to one provider's pricing.</p>
+            <span class="note">gemma4 · claude-opus-5 · gpt-5.6</span>
+          </article>
+          <article class="cap">
+            <span class="icon">⌂</span>
+            <h3>Local file access</h3>
+            <p>Point it at a working directory and it can read and edit files there — nothing leaves your machine unless a provider call requires it.</p>
+            <span class="note">read · write · your approval</span>
+          </article>
+          <article class="cap">
+            <span class="icon">◎</span>
+            <h3>Web search &amp; weather</h3>
+            <p>Answers grounded in a live search, not just training data — plus a straight answer for "do I need a jacket."</p>
+            <span class="note">self-hosted SearxNG</span>
+          </article>
+          <article class="cap">
+            <span class="icon">▦</span>
+            <h3>Image generation</h3>
+            <p>Describe it, get a picture back in the same thread — free by default, or bring your own key for a paid model.</p>
+            <span class="note">flux · gpt-image · nano banana</span>
+          </article>
+          <article class="cap">
+            <span class="icon">⌘</span>
+            <h3>Calendar &amp; Gmail</h3>
+            <p>Read-only access so it can answer questions about upcoming events and recent mail. It can never send an email or change an event.</p>
+            <span class="note">calendar.readonly · gmail.readonly</span>
+          </article>
+          <article class="cap">
+            <span class="icon">✎</span>
+            <h3>Notes across chats</h3>
+            <p>Save something once and it's there in every future conversation — stored as plain Markdown, not locked in a database you can't read.</p>
+            <span class="note">memory/*.md</span>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="install">
+      <div class="wrap">
+        <div class="section-head">
+          <span class="eyebrow">Two ways to run it</span>
+          <h2>Install it, or just open a tab</h2>
+        </div>
+        <div class="paths">
+          <article class="path-card featured">
+            <div class="path-top">
+              <h3>SAMIDA Desktop</h3>
+              <span class="path-tag">Recommended</span>
+            </div>
+            <p class="desc">A real Windows app. No browser sandbox, no shared server, no account to create — it provisions a fully local identity on first launch.</p>
+            <ul class="path-list">
+              <li>Native folder picker for full read/write file access</li>
+              <li>Auto-discovers a local Ollama install — no API key needed at all</li>
+              <li>Auto-updates in place, no reinstalling for new versions</li>
+            </ul>
+            <a class="btn btn-primary" href="https://github.com/stefansemb/samida.dev/releases/latest/download/SAMIDA-Setup.exe">Download for Windows</a>
+          </article>
+          <article class="path-card">
+            <div class="path-top"><h3>Hosted web app</h3></div>
+            <p class="desc">Nothing to install. Bring your own API keys for the providers you want, connect Google if you'd like, and start chatting.</p>
+            <ul class="path-list">
+              <li>Runs at app.samida.dev, works on any device with a browser</li>
+              <li>Local folder access via the File System Access API in Chrome/Edge</li>
+              <li>Your keys, encrypted at rest — never shared across accounts</li>
+            </ul>
+            <a class="btn btn-ghost" href="https://app.samida.dev">Open app.samida.dev →</a>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="memory">
+      <div class="wrap memory-strip">
+        <div class="memory-body">
+          <span class="eyebrow" style="display:block; margin-bottom:14px;">Memory, plainly</span>
+          <h2 style="font-size:clamp(24px,3vw,30px); margin-bottom:18px;">It remembers you in files you can open yourself</h2>
+          <p>No vector database, no opaque embeddings you have to trust. What SAMIDA remembers about you lives in Markdown files, routed by topic — <strong>edit them by hand, delete a line you don't like, and it takes effect on the next message.</strong></p>
+          <p>The richer profiles that read this memory are limited to your own account. Anyone else who talks to your instance gets the same assistant, minus your personal context.</p>
+        </div>
+        <div class="memory-file" aria-hidden="true">
+          <div class="memory-file-head">memory/priorities.md</div>
+          <pre><span class="h"># Active priorities</span>
+
+<span class="d">- Ship the Windows installer, then auto-update
+- Keep Pirate Survival's river system on schedule
+- Reply to Lena about the Friday deploy window</span></pre>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site">
+    <div class="wrap footer-row">
+      <a class="brand" href="https://samida.dev">
+        <svg class="mark" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M22 19.27C22 20.78 20.78 22 19.27 22H14.73C13.22 22 12 20.78 12 19.27V12H19.27C20.78 12 22 13.22 22 14.73V19.27Z" fill="#68C4FF"/>
+          <path d="M20 2C21.1 2 22 2.9 22 4V7C22 8.1 21.1 9 20 9H17C15.9 9 15 8.1 15 7V4C15 2.9 15.9 2 17 2H20Z" fill="#0C79D8"/>
+          <path d="M7 15C8.1 15 9 15.9 9 17V20C9 21.1 8.1 22 7 22H4C2.9 22 2 21.1 2 20V17C2 15.9 2.9 15 4 15H7Z" fill="#0C79D8"/>
+          <path d="M12 12H4.73C3.22 12 2 10.78 2 9.27V4.73C2 3.22 3.22 2 4.73 2H9.27C10.78 2 12 3.22 12 4.73V12Z" fill="#2E9EFF"/>
+        </svg>
+        SAMIDA
+      </a>
+      <div class="foot-links">
+        <a href="https://samida.dev">Built by Stefan Semb</a>
+        <a href="https://github.com/stefansemb/samida.dev">GitHub</a>
+        <a href="https://app.samida.dev">app.samida.dev</a>
+        <span>© 2026</span>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>
