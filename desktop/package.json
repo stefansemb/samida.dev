@@ -5,12 +5,36 @@
   "description": "SAMIDA Desktop - runs the assistant fully locally, no server or account needed.",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "build:backend": "powershell -ExecutionPolicy Bypass -File build-backend.ps1",
+    "build:web": "powershell -ExecutionPolicy Bypass -File build-web.ps1",
+    "dist": "npm run build:backend && npm run build:web && electron-builder"
   },
   "devDependencies": {
-    "electron": "38.5.0"
+    "electron": "38.5.0",
+    "electron-builder": "^26.15.3"
   },
   "allowScripts": {
     "electron@38.5.0": true
+  },
+  "build": {
+    "appId": "dev.samida.desktop",
+    "productName": "SAMIDA",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json"
+    ],
+    "extraResources": [
+      { "from": "build/backend/samida-backend", "to": "backend" },
+      { "from": "build/content", "to": "content" },
+      { "from": "build/web", "to": "web" }
+    ],
+    "win": {
+      "target": "nsis"
+    }
   }
 }

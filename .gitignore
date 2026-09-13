@@ -7,6 +7,8 @@ node_modules/
 __pycache__/
 dist/
 build/
+desktop/release*/
+desktop/dist-release*/
 logs/*
 !logs/.gitkeep
 data/*

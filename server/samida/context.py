@@ -87,8 +87,9 @@ class ContextError(RuntimeError):
 
 
 class ContextBuilder:
-    def __init__(self, project_root: Path) -> None:
-        self.project_root = project_root.resolve()
+    def __init__(self, content_root: Path, memory_root: Path | None = None) -> None:
+        self.content_root = content_root.resolve()
+        self.memory_root = (memory_root or self.content_root / "memory").resolve()
 
     def build(
         self,
@@ -110,7 +111,12 @@ class ContextBuilder:
             if effective_profile != "minimal"
             else list(CORE_FILES)
         )
-        sections = [self._load(relative_path) for relative_path in selected]
+        loaded = [
+            (relative_path, self._load(relative_path, optional=relative_path.startswith("memory/")))
+            for relative_path in selected
+        ]
+        included_files = [relative_path for relative_path, content in loaded if content is not None]
+        sections = [content for _, content in loaded if content is not None]
         prompt = (
             "You are SAMIDA. Answer the user's question directly. "
             + (f"Current working directory: {working_directory}. Treat this as fact.\n\n" if working_directory else "")
@@ -119,7 +125,7 @@ class ContextBuilder:
         )
         return BuiltContext(
             system_message=ChatMessage(role="system", content=prompt),
-            included_files=selected,
+            included_files=included_files,
         )
 
     def _select_memory(self, query: str) -> list[str]:
@@ -137,14 +143,26 @@ class ContextBuilder:
             selected.append("memory/personal.md")
         return selected
 
-    def _load(self, relative_path: str) -> str:
-        candidate = (self.project_root / relative_path).resolve()
-        if self.project_root not in candidate.parents:
+    def _load(self, relative_path: str, *, optional: bool = False) -> str | None:
+        if relative_path.startswith("memory/"):
+            root = self.memory_root
+            path_within_root = relative_path[len("memory/") :]
+        else:
+            root = self.content_root
+            path_within_root = relative_path
+        candidate = (root / path_within_root).resolve()
+        if root not in candidate.parents:
             raise ContextError(f"Invalid context path: {relative_path}")
         try:
             content = candidate.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            if optional:
+                return None
+            raise ContextError(f"Could not read the context file: {relative_path}") from None
         except OSError as exc:
             raise ContextError(f"Could not read the context file: {relative_path}") from exc
         if not content:
+            if optional:
+                return None
             raise ContextError(f"The context file is empty: {relative_path}")
         return f"--- SOURCE: {relative_path} ---\n{content}"

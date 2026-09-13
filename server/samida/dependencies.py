@@ -114,7 +114,8 @@ class ImageProviderFactory:
 
 @lru_cache
 def get_context_builder() -> ContextBuilder:
-    return ContextBuilder(get_settings().project_root)
+    settings = get_settings()
+    return ContextBuilder(settings.project_root, settings.resolved_memory_dir())
 
 
 @lru_cache

@@ -504,6 +504,8 @@ GENERIC_PRIORITIES_CONTENT = """\
 - Check the weather for any city
 - Save and recall personal notes across chats
 - Read your Google Calendar and Gmail, once connected under Settings
+- Pick a working directory (the + button by the message box) so I can read and edit files for you
+- Add your own API keys under Settings to unlock more models
 """
 
 
@@ -514,8 +516,12 @@ def get_priorities(
 ) -> dict[str, str]:
     if not auth.is_owner(user.email, settings):
         return {"content": GENERIC_PRIORITIES_CONTENT}
-    path = settings.project_root / "memory" / "priorities.md"
-    return {"content": path.read_text(encoding="utf-8") if path.exists() else ""}
+    path = settings.resolved_memory_dir() / "priorities.md"
+    content = path.read_text(encoding="utf-8").strip() if path.exists() else ""
+    # A brand-new/shared install has no priorities.md yet - show the same
+    # general "what SAMIDA can do" tips a non-owner would see instead of a
+    # blank "No priorities set." card.
+    return {"content": content or GENERIC_PRIORITIES_CONTENT}
 
 @app.post("/api/reminders", response_model=Reminder, status_code=201)
 def create_reminder(
