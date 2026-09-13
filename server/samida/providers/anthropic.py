@@ -64,17 +64,23 @@ def _message_payload(message: ChatMessage) -> dict:
     content: list[dict] = []
     if message.content:
         content.append({"type": "text", "text": message.content})
-    content.extend(
-        {
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": _image_media_type(image),
-                "data": image,
-            },
-        }
-        for image in message.images
-    )
+    if message.role != "assistant":
+        # The Messages API rejects 'image' content blocks on assistant-role
+        # turns - no image block type is allowed there at all. A prior
+        # assistant turn can carry .images here (e.g. a generate_image result
+        # reattached on reload, see storage.py's model_messages()), but
+        # replaying it as an image block would be rejected by the API.
+        content.extend(
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": _image_media_type(image),
+                    "data": image,
+                },
+            }
+            for image in message.images
+        )
     return {"role": message.role, "content": content}
 
 
