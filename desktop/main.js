@@ -89,6 +89,24 @@ function waitForServer(url, { timeoutMs = 30_000, intervalMs = 300 } = {}) {
   });
 }
 
+const googleOAuthConfigPath = path.join(userDataDir, 'google-oauth.json');
+
+function readGoogleOAuthConfig() {
+  // Google OAuth is a shared app-level credential, not a per-user API key
+  // (see server/samida/google_integration.py), so - unlike the other
+  // providers, which users add for themselves under Settings - it's
+  // configured once here, by hand-editing this JSON file (see Help > Open
+  // Data Folder). Absent on a fresh install; Calendar/Gmail just show as
+  // "not set up" until it exists.
+  try {
+    const raw = JSON.parse(fs.readFileSync(googleOAuthConfigPath, 'utf8'));
+    if (!raw.clientId || !raw.clientSecret) return {};
+    return { SAMIDA_GOOGLE_CLIENT_ID: raw.clientId, SAMIDA_GOOGLE_CLIENT_SECRET: raw.clientSecret };
+  } catch {
+    return {};
+  }
+}
+
 function commonBackendEnv() {
   return {
     ...process.env,
@@ -100,6 +118,12 @@ function commonBackendEnv() {
     SAMIDA_COOKIE_SECURE: 'false',
     SAMIDA_CORS_EXTRA_ORIGINS: WEB_URL,
     SAMIDA_PUBLIC_BASE_URL: WEB_URL,
+    // The Google OAuth callback route lives on the backend, not the
+    // frontend that SAMIDA_PUBLIC_BASE_URL points at - see
+    // Settings.resolved_google_oauth_base_url() for why these must differ
+    // here (unlike production, nothing reverse-proxies the two together).
+    SAMIDA_GOOGLE_OAUTH_BASE_URL: BACKEND_URL,
+    ...readGoogleOAuthConfig(),
   };
 }
 
@@ -227,6 +251,13 @@ function openUserDataSubfolder(subfolder) {
   void shell.openPath(target);
 }
 
+function openGoogleOAuthConfig() {
+  if (!fs.existsSync(googleOAuthConfigPath)) {
+    fs.writeFileSync(googleOAuthConfigPath, JSON.stringify({ clientId: '', clientSecret: '' }, null, 2), 'utf8');
+  }
+  void shell.openPath(googleOAuthConfigPath);
+}
+
 function showAboutDialog() {
   dialog.showMessageBox({
     type: 'info',
@@ -251,6 +282,7 @@ function buildApplicationMenu() {
         { type: 'separator' },
         { label: 'Open Data Folder', click: () => openUserDataSubfolder() },
         { label: 'Open Logs Folder', click: () => openUserDataSubfolder('logs') },
+        { label: 'Set Up Google Calendar && Gmail…', click: openGoogleOAuthConfig },
         { type: 'separator' },
         { label: 'About SAMIDA', click: showAboutDialog },
       ],
