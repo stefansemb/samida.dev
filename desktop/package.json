@@ -55,7 +55,8 @@
     "publish": {
       "provider": "github",
       "owner": "stefansemb",
-      "repo": "samida.dev"
+      "repo": "samida.dev",
+      "draft": false
     }
   },
   "dependencies": {
