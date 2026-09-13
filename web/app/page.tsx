@@ -754,30 +754,32 @@ export default function Home() {
             </Select>
           </div>
           <form className="composer" onSubmit={sendMessage}>
-            <Popover>
-              <PopoverTrigger
-                aria-label="Working directory"
-                className="composer-plus-button"
-                title="Set the working directory SAMIDA can read and edit files in"
-                type="button"
-              >
-                <Plus size={18} />
-              </PopoverTrigger>
-              <PopoverContent>
-                <PopoverTitle>Working directory</PopoverTitle>
-                <PopoverDescription>
-                  Lets SAMIDA read and edit files in this folder. Leave empty to disable file tools.
-                </PopoverDescription>
-                <Input
-                  onChange={(event) => setWorkingDirectory(event.target.value)}
-                  placeholder="/home/you/project"
-                  value={workingDirectory}
-                />
-                <Button disabled={pickingWorkspace} onClick={() => void pickWorkspace()} type="button" variant="outline">
-                  {pickingWorkspace ? 'Opening…' : 'Choose folder (desktop only)'}
-                </Button>
-              </PopoverContent>
-            </Popover>
+            {currentUser?.is_owner && (
+              <Popover>
+                <PopoverTrigger
+                  aria-label="Working directory"
+                  className="composer-plus-button"
+                  title="Set the working directory SAMIDA can read and edit files in"
+                  type="button"
+                >
+                  <Plus size={18} />
+                </PopoverTrigger>
+                <PopoverContent>
+                  <PopoverTitle>Working directory</PopoverTitle>
+                  <PopoverDescription>
+                    Lets SAMIDA read and edit files in this folder. Leave empty to disable file tools.
+                  </PopoverDescription>
+                  <Input
+                    onChange={(event) => setWorkingDirectory(event.target.value)}
+                    placeholder="/home/you/project"
+                    value={workingDirectory}
+                  />
+                  <Button disabled={pickingWorkspace} onClick={() => void pickWorkspace()} type="button" variant="outline">
+                    {pickingWorkspace ? 'Opening…' : 'Choose folder (desktop only)'}
+                  </Button>
+                </PopoverContent>
+              </Popover>
+            )}
             <textarea
               aria-label="Message to SAMIDA"
               onChange={(event) => setDraft(event.target.value)}

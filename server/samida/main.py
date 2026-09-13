@@ -667,8 +667,9 @@ async def conversation_chat(
             content=current_content,
             images=[image_base64] if image_base64 else [],
         )
+        caller_is_owner = auth.is_owner(user.email, settings)
         context = context_builder.build(
-            [*context_messages, current], request.profile, request.working_directory, is_owner=auth.is_owner(user.email, settings)
+            [*context_messages, current], request.profile, request.working_directory, is_owner=caller_is_owner
         )
         model_history = [
             ChatMessage.model_validate(message)
@@ -678,7 +679,7 @@ async def conversation_chat(
         if image_base64 and request.provider == "ollama":
             selected_model = settings.ollama_vision_model
         provider, resolved_model = await factory.build(request.provider, selected_model)
-        workspace = _resolve_workspace(request.working_directory)
+        workspace = _resolve_workspace(request.working_directory, is_owner=caller_is_owner)
         image_providers = await image_factory.build_fallback_chain()
         image_context = agent.ImageToolContext(providers=image_providers, store=store)
         notes_context = agent.NotesToolContext(store=store, user_id=user.id)
@@ -776,7 +777,14 @@ async def conversation_chat(
     )
 
 
-def _resolve_workspace(working_directory: str | None) -> Path | None:
+def _resolve_workspace(working_directory: str | None, *, is_owner: bool) -> Path | None:
+    # Workspace tools (list_directory/read_file/write_file) let the model
+    # read and write arbitrary files under this path on the machine running
+    # the backend - safe for the operator's own desktop use, but a severe
+    # secret-exfiltration risk for any other account once this runs on a
+    # shared server (they could just point it at the server's own .env).
+    if not is_owner:
+        return None
     if not working_directory or not working_directory.strip():
         return None
     candidate = Path(working_directory.strip())
@@ -884,7 +892,7 @@ async def _resolve_tool_call(
             raise StorageError("The tool call has already been resolved.")
 
         call = ToolCallRequest(id=record["id"], name=record["tool_name"], arguments=record["arguments"])
-        workspace = _resolve_workspace(record["working_directory"])
+        workspace = _resolve_workspace(record["working_directory"], is_owner=is_owner)
         target = str(call.arguments.get("path", ""))
 
         if approve:
