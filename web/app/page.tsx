@@ -894,10 +894,10 @@ export default function Home() {
             <input
               // @ts-expect-error -- webkitdirectory isn't in the standard React input typing
               webkitdirectory=""
-              hidden
               multiple
               onChange={handleBrowserFolderInputChange}
               ref={browserFileInputRef}
+              style={{ display: 'none' }}
               type="file"
             />
             <textarea
