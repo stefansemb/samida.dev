@@ -53,7 +53,8 @@ const WEB_HOST = app.isPackaged ? '127.0.0.1' : 'localhost';
 const WEB_URL = `http://${WEB_HOST}:${WEB_PORT}`;
 
 const LOCAL_ACCOUNT = { email: 'local@samida.desktop', password: 'samida-desktop-local-user' };
-const PROJECT_WEBSITE_URL = 'https://github.com/stefansemb/samida.dev';
+const PROJECT_WEBSITE_URL = 'https://get.samida.dev';
+const PROJECT_REPO_URL = 'https://github.com/stefansemb/samida.dev';
 
 const userDataDir = app.getPath('userData');
 fs.mkdirSync(userDataDir, { recursive: true });
@@ -327,7 +328,7 @@ function buildApplicationMenu() {
       role: 'help',
       submenu: [
         { label: 'SAMIDA Website', click: () => void shell.openExternal(PROJECT_WEBSITE_URL) },
-        { label: 'Report an Issue', click: () => void shell.openExternal(`${PROJECT_WEBSITE_URL}/issues/new`) },
+        { label: 'Report an Issue', click: () => void shell.openExternal(`${PROJECT_REPO_URL}/issues/new`) },
         { type: 'separator' },
         { label: 'Open Data Folder', click: () => openUserDataSubfolder() },
         { label: 'Open Logs Folder', click: () => openUserDataSubfolder('logs') },
