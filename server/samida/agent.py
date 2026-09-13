@@ -24,6 +24,11 @@ from samida.weather import WeatherClient, WeatherError
 
 MAX_TOOL_ITERATIONS = 4
 
+# In browser-workspace mode, none of these can run on the server (there's no
+# server-side directory) - the client executes them and reports back via
+# resume_after_decision, same as a human's write_file approval today.
+WORKSPACE_TOOL_NAMES = {"list_directory", "read_file", "write_file"}
+
 # Which argument identifies a low-risk tool call for logging/dedup purposes.
 _TARGET_ARG_BY_TOOL: dict[str, str] = {
     "generate_image": "prompt",
@@ -241,10 +246,14 @@ async def run_turn(
     weather_client: WeatherClient | None = None,
     notes_context: NotesToolContext | None = None,
     google_context: GoogleToolContext | None = None,
+    browser_workspace: bool = False,
 ) -> AgentTurnOutcome:
     """Run model turns, auto-executing low-risk tool calls, until a final message
-    or a medium-risk (confirmation-required) tool call is produced."""
-    tools = GENERAL_TOOL_SPECS + (WORKSPACE_TOOL_SPECS if workspace is not None else [])
+    or a confirmation-required tool call is produced. A medium-risk tool
+    (write_file server-side) needs a human's approval; in browser_workspace
+    mode, every workspace tool needs the client to actually execute it (there
+    is no server-side directory), so all three pause here regardless of risk."""
+    tools = GENERAL_TOOL_SPECS + (WORKSPACE_TOOL_SPECS if (workspace is not None or browser_workspace) else [])
     working = list(messages)
     generated_image_filename: str | None = None
 
@@ -262,7 +271,8 @@ async def run_turn(
 
         call = result.tool_call
         risk = RISK_BY_TOOL.get(call.name, "medium")
-        if risk != "low":
+        needs_client_execution = browser_workspace and call.name in WORKSPACE_TOOL_NAMES
+        if risk != "low" or needs_client_execution:
             return AgentTurnOutcome(
                 resolved_model=resolved_model,
                 pending_tool_call=call,
@@ -330,6 +340,7 @@ async def resume_after_decision(
     weather_client: WeatherClient | None = None,
     notes_context: NotesToolContext | None = None,
     google_context: GoogleToolContext | None = None,
+    browser_workspace: bool = False,
 ) -> AgentTurnOutcome:
     working = [*messages, _proposal_message(call), _result_message(call, result_payload)]
     return await run_turn(
@@ -344,4 +355,5 @@ async def resume_after_decision(
         weather_client=weather_client,
         notes_context=notes_context,
         google_context=google_context,
+        browser_workspace=browser_workspace,
     )

@@ -87,6 +87,7 @@ class ConversationStore:
                     model TEXT NOT NULL,
                     profile TEXT NOT NULL,
                     working_directory TEXT NOT NULL,
+                    browser_workspace INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
                     resolved_at TEXT,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
@@ -158,6 +159,9 @@ class ConversationStore:
                 """
             )
             self._seed_model_catalog(connection)
+            tool_call_columns = {row["name"] for row in connection.execute("PRAGMA table_info(tool_calls)").fetchall()}
+            if "browser_workspace" not in tool_call_columns:
+                connection.execute("ALTER TABLE tool_calls ADD COLUMN browser_workspace INTEGER NOT NULL DEFAULT 0")
             conversation_columns = {row["name"] for row in connection.execute("PRAGMA table_info(conversations)").fetchall()}
             if "owner_id" not in conversation_columns:
                 connection.execute("ALTER TABLE conversations ADD COLUMN owner_id TEXT REFERENCES users(id)")
@@ -678,6 +682,7 @@ class ConversationStore:
         model: str,
         profile: str,
         working_directory: str,
+        browser_workspace: bool = False,
     ) -> dict:
         self.get_conversation(conversation_id, owner_id)
         timestamp = _now()
@@ -685,8 +690,8 @@ class ConversationStore:
             connection.execute(
                 "INSERT INTO tool_calls "
                 "(id, conversation_id, tool_name, arguments_json, risk_level, status, "
-                "provider, model, profile, working_directory, created_at) "
-                "VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)",
+                "provider, model, profile, working_directory, browser_workspace, created_at) "
+                "VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)",
                 (
                     tool_call_id,
                     conversation_id,
@@ -697,6 +702,7 @@ class ConversationStore:
                     model,
                     profile,
                     working_directory,
+                    int(browser_workspace),
                     timestamp,
                 ),
             )
@@ -732,6 +738,7 @@ class ConversationStore:
         result["arguments"] = json.loads(result.pop("arguments_json"))
         raw_result = result.pop("result_json")
         result["result"] = json.loads(raw_result) if raw_result else None
+        result["browser_workspace"] = bool(result["browser_workspace"])
         return result
 
     def save_image(self, image: ImageAttachment) -> tuple[str, str]:

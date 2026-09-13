@@ -2,6 +2,7 @@
 /* oxlint-disable next/no-img-element -- local images need direct browser rendering. */
 
 import {
+  ChangeEvent,
   ClipboardEvent,
   KeyboardEvent,
   startTransition,
@@ -12,12 +13,21 @@ import {
 } from 'react';
 import { useRouter } from 'next/navigation';
 import { API_URL, CurrentUser, fetchCurrentUser, logout, requestJson } from '@/lib/api';
+import {
+  BrowserWorkspace,
+  browserWorkspaceFromFileList,
+  executeBrowserWorkspaceTool,
+  pickBrowserWorkspaceHandle,
+  supportsDirectoryPicker,
+} from '@/lib/browser-workspace';
 import { SamidaMark } from '@/components/samida-mark';
 import {
   BrainCircuit,
   Circle,
   Clock3,
   FileText,
+  Folder,
+  FolderOpen,
   Gauge,
   Image as ImageIcon,
   LogOut,
@@ -58,6 +68,7 @@ type PendingToolCall = {
   risk_level: 'low' | 'medium';
   status: 'pending' | 'approved' | 'rejected' | 'executed' | 'failed';
   created_at: string;
+  browser_workspace: boolean;
 };
 type Message = {
   id?: string;
@@ -256,6 +267,8 @@ export default function Home() {
   const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null);
   const [pendingToolCall, setPendingToolCall] = useState<PendingToolCall | null>(null);
   const [resolvingToolCall, setResolvingToolCall] = useState(false);
+  const [browserWorkspace, setBrowserWorkspace] = useState<BrowserWorkspace | null>(null);
+  const browserFileInputRef = useRef<HTMLInputElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
   const activeRef = useRef<Conversation | null>(null);
@@ -339,11 +352,38 @@ export default function Home() {
     setPendingToolCall(null);
   }
 
+  const applyClientToolResult = useCallback(
+    async (call: PendingToolCall, result: Record<string, unknown>) => {
+      const conversation = activeRef.current;
+      if (!conversation) return;
+      const response = await requestJson<ToolCallDecisionResult>(
+        `/api/conversations/${conversation.id}/tool-calls/${call.id}/client-result`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ result }) },
+      );
+      setMessages((current) => [...current, response.assistant_message]);
+      setActiveConversation(response.conversation);
+      activeRef.current = response.conversation;
+      setPendingToolCall(response.pending_tool_call ?? null);
+      await refreshConversations();
+    },
+    [refreshConversations],
+  );
+
   async function decideToolCall(decision: 'approve' | 'reject') {
     const conversation = activeRef.current;
     if (!pendingToolCall || !conversation) return;
     setResolvingToolCall(true);
     try {
+      if (pendingToolCall.browser_workspace) {
+        const clientResult =
+          decision === 'approve'
+            ? browserWorkspace
+              ? await executeBrowserWorkspaceTool(browserWorkspace, pendingToolCall.tool_name, pendingToolCall.arguments)
+              : { error: 'No local folder is selected.' }
+            : { status: 'rejected', message: 'The user rejected the action.' };
+        await applyClientToolResult(pendingToolCall, clientResult);
+        return;
+      }
       const result = await requestJson<ToolCallDecisionResult>(
         `/api/conversations/${conversation.id}/tool-calls/${pendingToolCall.id}/${decision}`,
         { method: 'POST' },
@@ -361,6 +401,27 @@ export default function Home() {
       setResolvingToolCall(false);
     }
   }
+
+  useEffect(() => {
+    if (!pendingToolCall || !pendingToolCall.browser_workspace || pendingToolCall.tool_name === 'write_file') return;
+    let cancelled = false;
+    void (async () => {
+      setResolvingToolCall(true);
+      try {
+        const clientResult = browserWorkspace
+          ? await executeBrowserWorkspaceTool(browserWorkspace, pendingToolCall.tool_name, pendingToolCall.arguments)
+          : { error: 'No local folder is selected.' };
+        if (!cancelled) await applyClientToolResult(pendingToolCall, clientResult);
+      } catch (caught) {
+        if (!cancelled) setError(caught instanceof Error ? caught.message : 'Could not run the local file tool.');
+      } finally {
+        if (!cancelled) setResolvingToolCall(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingToolCall, browserWorkspace, applyClientToolResult]);
 
   async function saveRename(conversation: Conversation) {
     const title = renameValue.trim();
@@ -431,6 +492,7 @@ export default function Home() {
                 model: chatModel,
                 profile: selectedProfile,
                 working_directory: workingDirectory.trim() || null,
+                browser_workspace: Boolean(browserWorkspace),
                 image: image
                 ? {
                     filename: image.filename,
@@ -461,7 +523,7 @@ export default function Home() {
         setIsSending(false);
       }
     },
-    [createConversation, refreshConversations, selectedModel, selectedProfile, workingDirectory],
+    [createConversation, refreshConversations, selectedModel, selectedProfile, workingDirectory, browserWorkspace],
   );
 
   async function sendMessage(event?: { preventDefault: () => void }) {
@@ -484,6 +546,25 @@ export default function Home() {
     } finally {
       setPickingWorkspace(false);
     }
+  }
+
+  async function chooseBrowserFolder() {
+    if (supportsDirectoryPicker()) {
+      try {
+        setBrowserWorkspace(await pickBrowserWorkspaceHandle());
+      } catch (caught) {
+        if (caught instanceof DOMException && caught.name === 'AbortError') return;
+        setError(caught instanceof Error ? caught.message : 'Could not access that folder.');
+      }
+      return;
+    }
+    browserFileInputRef.current?.click();
+  }
+
+  function handleBrowserFolderInputChange(event: ChangeEvent<HTMLInputElement>) {
+    const fileList = event.target.files;
+    if (fileList) setBrowserWorkspace(browserWorkspaceFromFileList(fileList));
+    event.target.value = '';
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -780,6 +861,45 @@ export default function Home() {
                 </PopoverContent>
               </Popover>
             )}
+            <Popover>
+              <PopoverTrigger
+                aria-label="Local folder"
+                className="composer-plus-button"
+                title="Let SAMIDA read (and, in Chrome/Edge, write) files in a folder on your own computer"
+                type="button"
+              >
+                {browserWorkspace ? <FolderOpen size={18} /> : <Folder size={18} />}
+              </PopoverTrigger>
+              <PopoverContent>
+                <PopoverTitle>Local folder</PopoverTitle>
+                <PopoverDescription>
+                  {supportsDirectoryPicker()
+                    ? 'SAMIDA can read and write files here, directly in your browser - nothing is sent to the server’s filesystem.'
+                    : 'This browser can only read files here; saving a changed file downloads it instead of writing it back.'}
+                </PopoverDescription>
+                {browserWorkspace ? (
+                  <>
+                    <p className="field-hint">Selected: {browserWorkspace.name}</p>
+                    <Button onClick={() => setBrowserWorkspace(null)} type="button" variant="outline">
+                      Clear
+                    </Button>
+                  </>
+                ) : (
+                  <Button onClick={() => void chooseBrowserFolder()} type="button" variant="outline">
+                    Choose local folder
+                  </Button>
+                )}
+              </PopoverContent>
+            </Popover>
+            <input
+              // @ts-expect-error -- webkitdirectory isn't in the standard React input typing
+              webkitdirectory=""
+              hidden
+              multiple
+              onChange={handleBrowserFolderInputChange}
+              ref={browserFileInputRef}
+              type="file"
+            />
             <textarea
               aria-label="Message to SAMIDA"
               onChange={(event) => setDraft(event.target.value)}
@@ -829,7 +949,7 @@ export default function Home() {
       </AlertDialog>
 
       <AlertDialog
-        open={Boolean(pendingToolCall)}
+        open={Boolean(pendingToolCall) && !(pendingToolCall?.browser_workspace && pendingToolCall.tool_name !== 'write_file')}
         onOpenChange={(open) => !open && setPendingToolCall(null)}
       >
         <AlertDialogContent>
@@ -839,7 +959,9 @@ export default function Home() {
             </AlertDialogTitle>
             <AlertDialogDescription>
               {pendingToolCall?.tool_name === 'write_file'
-                ? `Write to "${argText(pendingToolCall.arguments.path)}" in ${workingDirectory}. Review the content before approving.`
+                ? `Write to "${argText(pendingToolCall.arguments.path)}" in ${
+                    pendingToolCall.browser_workspace ? (browserWorkspace?.name ?? 'your local folder') : workingDirectory
+                  }. Review the content before approving.`
                 : `Tool: ${pendingToolCall?.tool_name ?? ''}.`}
             </AlertDialogDescription>
           </AlertDialogHeader>

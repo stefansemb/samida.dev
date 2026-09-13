@@ -137,6 +137,28 @@ def test_pending_tool_call_lifecycle(store: ConversationStore, owner_id: str) ->
     with pytest.raises(NotFoundError):
         store.resolve_tool_call("call-1", owner_id, "executed", {})
 
+    assert created["browser_workspace"] is False
+
+
+def test_pending_tool_call_records_browser_workspace_flag(store: ConversationStore, owner_id: str) -> None:
+    conversation = store.create_conversation(owner_id)
+    created = store.create_pending_tool_call(
+        conversation["id"],
+        owner_id,
+        "call-2",
+        "read_file",
+        {"path": "a.txt"},
+        "low",
+        "ollama",
+        "gpt-oss:120b",
+        "minimal",
+        "",
+        browser_workspace=True,
+    )
+
+    assert created["browser_workspace"] is True
+    assert store.get_tool_call("call-2", owner_id)["browser_workspace"] is True
+
 
 def test_messages_expose_tool_call_placeholder(store: ConversationStore, owner_id: str) -> None:
     conversation = store.create_conversation(owner_id)

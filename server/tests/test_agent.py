@@ -384,3 +384,85 @@ async def test_email_tool_surfaces_gmail_error(monkeypatch) -> None:
 async def test_calendar_tool_and_email_tool_without_context() -> None:
     assert await agent.calendar_tool(None, None) == {"error": "Google Calendar is not connected. Connect it under Settings."}
     assert await agent.email_tool(None, "") == {"error": "Gmail is not connected. Connect it under Settings."}
+
+
+class _WorkspaceToolProposingProvider:
+    """Proposes a given workspace tool once, then a final message."""
+
+    name = "ollama"
+
+    def __init__(self, tool_name: str, arguments: dict) -> None:
+        self._tool_name = tool_name
+        self._arguments = arguments
+        self.calls = 0
+        self.seen_tools: list[dict] | None = None
+
+    async def chat(self, messages, model=None, tools=None) -> ChatTurnResult:
+        self.calls += 1
+        self.seen_tools = tools
+        if self.calls == 1:
+            return ChatTurnResult(
+                resolved_model="m",
+                tool_call=ToolCallRequest(id="call-1", name=self._tool_name, arguments=self._arguments),
+            )
+        return ChatTurnResult(resolved_model="m", message=ChatMessage(role="assistant", content="done"))
+
+
+@pytest.mark.asyncio
+async def test_browser_workspace_pauses_low_risk_file_tools_for_client_execution(tmp_path: Path) -> None:
+    """list_directory and read_file are normally auto-executed server-side
+    (low risk) - in browser_workspace mode there is no server-side directory
+    at all, so they must pause for the client to execute instead."""
+    provider = _WorkspaceToolProposingProvider("read_file", {"path": "notes.txt"})
+
+    outcome = await agent.run_turn(
+        provider,
+        "m",
+        [ChatMessage(role="user", content="read notes.txt")],
+        workspace=None,
+        logs_dir=tmp_path,
+        browser_workspace=True,
+    )
+
+    assert outcome.pending_tool_call is not None
+    assert outcome.pending_tool_call.name == "read_file"
+    assert provider.calls == 1  # never resumed automatically - waits for the client
+
+
+@pytest.mark.asyncio
+async def test_browser_workspace_offers_workspace_tools_without_a_server_workspace(tmp_path: Path) -> None:
+    provider = _WorkspaceToolProposingProvider("list_directory", {"path": "."})
+
+    await agent.run_turn(
+        provider,
+        "m",
+        [ChatMessage(role="user", content="what's in the folder?")],
+        workspace=None,
+        logs_dir=tmp_path,
+        browser_workspace=True,
+    )
+
+    tool_names = {spec["name"] for spec in (provider.seen_tools or [])}
+    assert "read_file" in tool_names
+    assert "write_file" in tool_names
+
+
+@pytest.mark.asyncio
+async def test_resume_after_decision_continues_with_browser_workspace_client_result(tmp_path: Path) -> None:
+    provider = _WorkspaceToolProposingProvider("write_file", {"path": "a.txt", "content": "hi"})
+
+    outcome = await agent.resume_after_decision(
+        provider,
+        "m",
+        [ChatMessage(role="user", content="read a.txt then write b.txt")],
+        call=ToolCallRequest(id="call-0", name="read_file", arguments={"path": "a.txt"}),
+        result_payload={"content": "hi there"},
+        workspace=None,
+        logs_dir=tmp_path,
+        browser_workspace=True,
+    )
+
+    # The provider proposes another workspace tool (write_file) on this next
+    # turn - it must still pause for the client, not try to execute it.
+    assert outcome.pending_tool_call is not None
+    assert outcome.pending_tool_call.name == "write_file"

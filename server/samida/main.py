@@ -34,6 +34,7 @@ from samida.schemas import (
     ChatMessage,
     ChatRequest,
     ChatResponse,
+    ClientToolResultRequest,
     ContextPreviewRequest,
     ContextPreviewResponse,
     ConversationChatRequest,
@@ -701,6 +702,7 @@ async def conversation_chat(
             weather_client=weather_client,
             notes_context=notes_context,
             google_context=google_context,
+            browser_workspace=request.browser_workspace,
         )
 
         pending_tool_call: PendingToolCall | None = None
@@ -718,6 +720,7 @@ async def conversation_chat(
                 turn.resolved_model,
                 request.profile,
                 request.working_directory or "",
+                browser_workspace=request.browser_workspace,
             )
             conversation, user_message, assistant_message = store.add_exchange(
                 conversation_id,
@@ -736,6 +739,7 @@ async def conversation_chat(
                 risk_level=record["risk_level"],
                 status=record["status"],
                 created_at=record["created_at"],
+                browser_workspace=record["browser_workspace"],
             )
         else:
             conversation, user_message, assistant_message = store.add_exchange(
@@ -868,11 +872,50 @@ async def reject_tool_call(
     )
 
 
+@app.post(
+    "/api/conversations/{conversation_id}/tool-calls/{tool_call_id}/client-result",
+    response_model=ToolCallDecisionResponse,
+)
+async def submit_client_tool_result(
+    conversation_id: str,
+    tool_call_id: str,
+    request: ClientToolResultRequest,
+    factory: ChatProviderFactory = Depends(get_chat_provider_factory),
+    image_factory: ImageProviderFactory = Depends(get_image_provider_factory),
+    context_builder: ContextBuilder = Depends(get_context_builder),
+    store: ConversationStore = Depends(get_conversation_store),
+    search_client: SearchClient = Depends(get_search_client),
+    camofox: CamoFoxClient | None = Depends(get_camofox_client),
+    weather_client: WeatherClient = Depends(get_weather_client),
+    settings: Settings = Depends(get_settings),
+    user: auth.User = Depends(auth.get_current_user),
+) -> ToolCallDecisionResponse:
+    """Reports the outcome of a workspace tool (list_directory/read_file/
+    write_file) that the browser executed itself against a folder the user
+    picked locally - SAMIDA's backend never touches that filesystem."""
+    return await _resolve_tool_call(
+        conversation_id,
+        tool_call_id,
+        client_result=request.result,
+        factory=factory,
+        image_factory=image_factory,
+        context_builder=context_builder,
+        store=store,
+        search_client=search_client,
+        camofox=camofox,
+        weather_client=weather_client,
+        settings=settings,
+        owner_id=user.id,
+        is_owner=auth.is_owner(user.email, settings),
+    )
+
+
 async def _resolve_tool_call(
     conversation_id: str,
     tool_call_id: str,
     *,
-    approve: bool,
+    approve: bool | None = None,
+    client_result: dict | None = None,
     factory: ChatProviderFactory,
     image_factory: ImageProviderFactory,
     context_builder: ContextBuilder,
@@ -890,12 +933,19 @@ async def _resolve_tool_call(
             raise NotFoundError("The tool call does not belong to this chat.")
         if record["status"] != "pending":
             raise StorageError("The tool call has already been resolved.")
+        if record["browser_workspace"] and client_result is None:
+            raise StorageError("This tool call must be resolved with the browser's own result.")
+        if not record["browser_workspace"] and client_result is not None:
+            raise StorageError("This tool call does not require a browser-side result.")
 
         call = ToolCallRequest(id=record["id"], name=record["tool_name"], arguments=record["arguments"])
         workspace = _resolve_workspace(record["working_directory"], is_owner=is_owner)
         target = str(call.arguments.get("path", ""))
 
-        if approve:
+        if client_result is not None:
+            outcome = client_result
+            status = "failed" if "error" in outcome else "executed"
+        elif approve:
             try:
                 outcome = tool_impl.write_file(workspace, target, call.arguments.get("content", ""))
                 status = "executed"
@@ -941,6 +991,7 @@ async def _resolve_tool_call(
             weather_client=weather_client,
             notes_context=notes_context,
             google_context=google_context,
+            browser_workspace=record["browser_workspace"],
         )
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -965,6 +1016,7 @@ async def _resolve_tool_call(
             turn.resolved_model,
             record["profile"],
             record["working_directory"],
+            browser_workspace=record["browser_workspace"],
         )
         conversation, assistant_message = store.append_assistant_message(
             conversation_id,
@@ -983,6 +1035,7 @@ async def _resolve_tool_call(
                 risk_level=new_record["risk_level"],
                 status=new_record["status"],
                 created_at=new_record["created_at"],
+                browser_workspace=new_record["browser_workspace"],
             ),
         )
 

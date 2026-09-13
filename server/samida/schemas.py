@@ -132,6 +132,7 @@ class PendingToolCall(BaseModel):
     risk_level: Literal["low", "medium"]
     status: Literal["pending", "approved", "rejected", "executed", "failed"]
     created_at: str
+    browser_workspace: bool = False
 
 
 class StoredMessage(BaseModel):
@@ -161,6 +162,7 @@ class ConversationChatRequest(BaseModel):
     model: str | None = None
     profile: Literal["minimal", "samida-standard", "coding", "jarvis", "unreal"] = "minimal"
     working_directory: str | None = None
+    browser_workspace: bool = False
 
     @model_validator(mode="after")
     def require_text_or_image(self) -> "ConversationChatRequest":
@@ -185,6 +187,15 @@ class ToolCallDecisionResponse(BaseModel):
     conversation: ConversationSummary
     assistant_message: StoredMessage
     pending_tool_call: PendingToolCall | None = None
+
+
+class ClientToolResultRequest(BaseModel):
+    """The browser's own outcome for a workspace tool call it executed
+    locally (list_directory/read_file/write_file) - shaped like whatever
+    that tool would have returned if the server had run it, e.g.
+    {"content": "..."} for read_file or {"error": "..."} on failure."""
+
+    result: dict
 
 
 class ResearchReport(BaseModel):
