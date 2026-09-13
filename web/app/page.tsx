@@ -17,6 +17,7 @@ import {
   BrowserWorkspace,
   browserWorkspaceFromFileList,
   executeBrowserWorkspaceTool,
+  isBraveBrowser,
   pickBrowserWorkspaceHandle,
   supportsDirectoryPicker,
 } from '@/lib/browser-workspace';
@@ -268,6 +269,7 @@ export default function Home() {
   const [pendingToolCall, setPendingToolCall] = useState<PendingToolCall | null>(null);
   const [resolvingToolCall, setResolvingToolCall] = useState(false);
   const [browserWorkspace, setBrowserWorkspace] = useState<BrowserWorkspace | null>(null);
+  const [isBrave, setIsBrave] = useState(false);
   const browserFileInputRef = useRef<HTMLInputElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
@@ -401,6 +403,11 @@ export default function Home() {
       setResolvingToolCall(false);
     }
   }
+
+  useEffect(() => {
+    if (supportsDirectoryPicker()) return;
+    void isBraveBrowser().then(setIsBrave);
+  }, []);
 
   useEffect(() => {
     if (!pendingToolCall || !pendingToolCall.browser_workspace || pendingToolCall.tool_name === 'write_file') return;
@@ -877,6 +884,12 @@ export default function Home() {
                     ? 'SAMIDA can read and write files here, directly in your browser - nothing is sent to the server’s filesystem.'
                     : 'This browser can only read files here; saving a changed file downloads it instead of writing it back.'}
                 </PopoverDescription>
+                {!supportsDirectoryPicker() && isBrave && (
+                  <p className="field-hint">
+                    Using Brave? Full read+write is available behind a flag: open brave://flags, search
+                    “File System Access API”, set it to Enabled, and relaunch.
+                  </p>
+                )}
                 {browserWorkspace ? (
                   <>
                     <p className="field-hint">Selected: {browserWorkspace.name}</p>

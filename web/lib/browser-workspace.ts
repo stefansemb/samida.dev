@@ -16,6 +16,19 @@ export function supportsDirectoryPicker(): boolean {
   return typeof window !== 'undefined' && 'showDirectoryPicker' in window;
 }
 
+// Brave ships the File System Access API but disables it by default (a
+// fingerprinting-surface tradeoff) - it's off behind a flag, not a normal
+// setting, so it's worth telling Brave users specifically where to find it.
+export async function isBraveBrowser(): Promise<boolean> {
+  const brave = (navigator as unknown as { brave?: { isBrave: () => Promise<boolean> } }).brave;
+  if (!brave) return false;
+  try {
+    return await brave.isBrave();
+  } catch {
+    return false;
+  }
+}
+
 export async function pickBrowserWorkspaceHandle(): Promise<BrowserWorkspace> {
   const picker = (window as unknown as { showDirectoryPicker: () => Promise<FileSystemDirectoryHandle> }).showDirectoryPicker;
   const handle = await picker();
