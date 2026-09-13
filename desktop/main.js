@@ -16,6 +16,7 @@
 //   they're bundled into the installer.
 
 const { app, BrowserWindow, Menu, dialog, ipcMain, session, shell } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -268,6 +269,54 @@ function showAboutDialog() {
   });
 }
 
+// Auto-update via electron-updater, reading GitHub Releases (see
+// desktop/package.json's `build.publish` and `npm run publish`) - only
+// meaningful in a packaged build, since dev mode isn't installed from a
+// release. `manualCheckInProgress` is only used to decide whether a
+// "no update"/error result deserves a dialog (a manual Help-menu check
+// should tell you either way; the silent startup check shouldn't nag).
+let manualCheckInProgress = false;
+
+function setupAutoUpdater() {
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.on('update-downloaded', (info) => {
+    void dialog
+      .showMessageBox({
+        type: 'info',
+        title: 'Update ready',
+        message: `SAMIDA ${info.version} has been downloaded.`,
+        detail: 'Restart now to install it, or it will install automatically next time you quit.',
+        buttons: ['Restart Now', 'Later'],
+        defaultId: 0,
+      })
+      .then((result) => {
+        if (result.response === 0) autoUpdater.quitAndInstall();
+      });
+  });
+  autoUpdater.on('update-not-available', () => {
+    if (manualCheckInProgress) {
+      dialog.showMessageBox({ type: 'info', title: 'No updates', message: "You're running the latest version of SAMIDA." });
+    }
+    manualCheckInProgress = false;
+  });
+  autoUpdater.on('error', (error) => {
+    if (manualCheckInProgress) {
+      dialog.showErrorBox('Could not check for updates', error instanceof Error ? error.message : String(error));
+    }
+    manualCheckInProgress = false;
+  });
+}
+
+function checkForUpdates({ manual = false } = {}) {
+  if (!app.isPackaged) {
+    if (manual) dialog.showMessageBox({ type: 'info', message: 'Update checks only run in a packaged build.' });
+    return;
+  }
+  manualCheckInProgress = manual;
+  void autoUpdater.checkForUpdates();
+}
+
 function buildApplicationMenu() {
   const template = [
     { role: 'fileMenu' },
@@ -284,6 +333,7 @@ function buildApplicationMenu() {
         { label: 'Open Logs Folder', click: () => openUserDataSubfolder('logs') },
         { label: 'Set Up Google Calendar && Gmail…', click: openGoogleOAuthConfig },
         { type: 'separator' },
+        { label: 'Check for Updates…', click: () => checkForUpdates({ manual: true }) },
         { label: 'About SAMIDA', click: showAboutDialog },
       ],
     },
@@ -293,6 +343,8 @@ function buildApplicationMenu() {
 
 app.whenReady().then(async () => {
   buildApplicationMenu();
+  setupAutoUpdater();
+  checkForUpdates();
   startBackend();
   startWeb();
   try {

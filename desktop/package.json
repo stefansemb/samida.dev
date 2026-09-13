@@ -8,7 +8,8 @@
     "start": "electron .",
     "build:backend": "powershell -ExecutionPolicy Bypass -File build-backend.ps1",
     "build:web": "powershell -ExecutionPolicy Bypass -File build-web.ps1",
-    "dist": "npm run build:backend && npm run build:web && electron-builder"
+    "dist": "npm run build:backend && npm run build:web && electron-builder",
+    "publish": "npm run build:backend && npm run build:web && electron-builder --publish always"
   },
   "devDependencies": {
     "electron": "38.5.0",
@@ -26,15 +27,37 @@
     "files": [
       "main.js",
       "preload.js",
-      "package.json"
+      "package.json",
+      "node_modules/**/*",
+      "!node_modules/electron/**/*"
     ],
     "extraResources": [
-      { "from": "build/backend/samida-backend", "to": "backend" },
-      { "from": "build/content", "to": "content" },
-      { "from": "build/web", "to": "web" }
+      {
+        "from": "build/backend/samida-backend",
+        "to": "backend"
+      },
+      {
+        "from": "build/content",
+        "to": "content"
+      },
+      {
+        "from": "build/web",
+        "to": "web"
+      }
     ],
     "win": {
       "target": "nsis"
+    },
+    "nsis": {
+      "artifactName": "${productName}-Setup.${ext}"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "stefansemb",
+      "repo": "samida.dev"
     }
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }

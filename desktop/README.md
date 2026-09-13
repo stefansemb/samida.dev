@@ -50,6 +50,38 @@ finally `electron-builder`, producing `release/SAMIDA Setup
 Each script can also be run on its own (`npm run build:backend`,
 `npm run build:web`) while iterating on just one side.
 
+## Publishing an update
+
+Installed copies auto-update via `electron-updater`, checking GitHub
+Releases on this repo (`build.publish` in `package.json`) on every
+launch, plus **Help > Check for Updates…** for a manual check. To ship
+a new version:
+
+1. Bump `"version"` in `desktop/package.json` (auto-update compares
+   this against what's published - skipping it means nothing to
+   update to).
+2. Generate a GitHub personal access token with write access to this
+   repo's contents/releases (github.com/settings/tokens), and run:
+   ```bash
+   cd desktop
+   GH_TOKEN=<your-token> npm run publish
+   ```
+   This runs the same build pipeline as `npm run dist`, then uploads
+   the installer, its blockmap, and `latest.yml` to a new GitHub
+   Release tagged with the version from step 1. Keep the token out of
+   shell history/scripts you'd commit - it's only needed for this one
+   command.
+3. Installed copies pick it up automatically (downloaded silently,
+   installed on next restart or on quit) - no separate distribution
+   step needed.
+
+For **new** installs, the installer's filename is version-less
+(`nsis.artifactName`), so this link always resolves to whatever was
+most recently published - safe to hardcode once on a public page:
+```
+https://github.com/stefansemb/samida.dev/releases/latest/download/SAMIDA-Setup.exe
+```
+
 ## How it works
 
 - Spawns the FastAPI backend and the frontend as child processes (dev

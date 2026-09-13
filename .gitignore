@@ -8,7 +8,7 @@ __pycache__/
 dist/
 build/
 desktop/release*/
-desktop/dist-release*/
+desktop/dist*/
 logs/*
 !logs/.gitkeep
 data/*
