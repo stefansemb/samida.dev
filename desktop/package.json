@@ -53,14 +53,12 @@
     "nsis": {
       "artifactName": "${productName}-Setup.${ext}"
     },
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "stefansemb",
-        "repo": "samida.dev",
-        "draft": false
-      }
-    ]
+    "publish": {
+      "provider": "github",
+      "owner": "stefansemb",
+      "repo": "samida.dev",
+      "releaseType": "release"
+    }
   },
   "dependencies": {
     "electron-updater": "^6.8.9"
