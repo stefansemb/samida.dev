@@ -261,6 +261,7 @@ export default function Home() {
   const [selectedProfile, setSelectedProfile] = useState('minimal');
   const [workingDirectory, setWorkingDirectory] = useState('');
   const [pickingWorkspace, setPickingWorkspace] = useState(false);
+  const [pickingBrowserFolder, setPickingBrowserFolder] = useState(false);
   const [lastUsedModel, setLastUsedModel] = useState<string | null>(null);
   const [lastUsedProvider, setLastUsedProvider] = useState<string | null>(null);
   const [chatUsage, setChatUsage] = useState<UsageInfo | null>(null);
@@ -566,12 +567,20 @@ export default function Home() {
   }
 
   async function chooseBrowserFolder() {
+    if (pickingBrowserFolder) return;
     if (supportsDirectoryPicker()) {
+      setPickingBrowserFolder(true);
       try {
         setBrowserWorkspace(await pickBrowserWorkspaceHandle());
       } catch (caught) {
         if (caught instanceof DOMException && caught.name === 'AbortError') return;
+        if (caught instanceof DOMException && /already active/i.test(caught.message)) {
+          setError('A folder picker is already open - finish or cancel it, then try again.');
+          return;
+        }
         setError(caught instanceof Error ? caught.message : 'Could not access that folder.');
+      } finally {
+        setPickingBrowserFolder(false);
       }
       return;
     }
@@ -913,8 +922,8 @@ export default function Home() {
                     </Button>
                   </>
                 ) : (
-                  <Button onClick={() => void chooseBrowserFolder()} type="button" variant="outline">
-                    Choose local folder
+                  <Button disabled={pickingBrowserFolder} onClick={() => void chooseBrowserFolder()} type="button" variant="outline">
+                    {pickingBrowserFolder ? 'Opening…' : 'Choose local folder'}
                   </Button>
                 )}
               </PopoverContent>
