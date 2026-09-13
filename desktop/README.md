@@ -43,9 +43,8 @@ ship in the installer, see "Packaged mode" below), `build-web.ps1`
 (runs `vinext build` with `NEXT_PUBLIC_SAMIDA_API_URL` baked to match
 the packaged backend's URL, then stages a production-only
 `node_modules` alongside the built `dist/` into `build/web/`), and
-finally `electron-builder`, producing `release/SAMIDA Setup
-<version>.exe` (NSIS installer) plus an unpacked
-`release/win-unpacked/` for faster iteration.
+finally `electron-builder`, producing `dist/SAMIDA-Setup.exe` (NSIS
+installer) plus an unpacked `dist/win-unpacked/` for faster iteration.
 
 Each script can also be run on its own (`npm run build:backend`,
 `npm run build:web`) while iterating on just one side.

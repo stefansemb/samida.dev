@@ -22,7 +22,7 @@
     "appId": "dev.samida.desktop",
     "productName": "SAMIDA",
     "directories": {
-      "output": "release"
+      "output": "dist"
     },
     "files": [
       "main.js",
