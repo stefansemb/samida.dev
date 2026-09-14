@@ -1,5 +1,7 @@
+import ipaddress
+import socket
 from html.parser import HTMLParser
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -29,11 +31,39 @@ class _TextExtractor(HTMLParser):
                 self.chunks.append(text)
 
 
+def _is_public_ip(raw_ip: str) -> bool:
+    address = ipaddress.ip_address(raw_ip)
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    return not (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_reserved
+        or address.is_multicast
+        or address.is_unspecified
+    )
+
+
 def _public_url(url: str) -> str:
+    # This tool's URL comes from whatever page/prompt the model is reading -
+    # a malicious page could try to get it to "fetch" an internal address
+    # (a home-network device, a cloud metadata endpoint, localhost) instead
+    # of a real public page. Scheme alone doesn't stop that, so resolve the
+    # hostname and reject anything that lands on a private/internal IP.
     parsed = urlparse(url)
-    if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
         raise SimpleFetchError("Only public HTTPS pages can be fetched.")
+    try:
+        resolved_ips = {info[4][0] for info in socket.getaddrinfo(parsed.hostname, None)}
+    except socket.gaierror as exc:
+        raise SimpleFetchError(f"Could not resolve the page's hostname: {exc}") from exc
+    if not resolved_ips or not all(_is_public_ip(ip) for ip in resolved_ips):
+        raise SimpleFetchError("This URL resolves to a private or internal address, which can't be fetched.")
     return url
+
+
+MAX_REDIRECTS = 5
 
 
 async def fetch(url: str, *, timeout: float = 15.0) -> str:
@@ -45,11 +75,24 @@ async def fetch(url: str, *, timeout: float = 15.0) -> str:
     service for JS-heavy or bot-guarded pages) isn't configured or reachable."""
     url = _public_url(url)
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
-            response = await client.get(
-                url, headers={"User-Agent": "Mozilla/5.0 (compatible; SAMIDA/1.0)"}
-            )
-            response.raise_for_status()
+        # Redirects are followed manually (not httpx's follow_redirects) so
+        # each hop is re-validated - otherwise a public URL could redirect
+        # straight to an internal address and skip the check above entirely.
+        async with httpx.AsyncClient(follow_redirects=False, timeout=timeout) as client:
+            for _ in range(MAX_REDIRECTS + 1):
+                response = await client.get(
+                    url, headers={"User-Agent": "Mozilla/5.0 (compatible; SAMIDA/1.0)"}
+                )
+                if response.is_redirect:
+                    location = response.headers.get("location")
+                    if not location:
+                        raise SimpleFetchError("The page redirected without a destination.")
+                    url = _public_url(urljoin(str(response.url), location))
+                    continue
+                response.raise_for_status()
+                break
+            else:
+                raise SimpleFetchError("The page redirected too many times.")
     except httpx.HTTPError as exc:
         raise SimpleFetchError(f"Could not fetch the page: {exc}") from exc
 
