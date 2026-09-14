@@ -131,6 +131,9 @@ type UsageInfo = {
   output_tokens: number;
   total_tokens: number;
 };
+type SkillSummary = {
+  name: string;
+};
 type WebMcpTool = {
   name: string;
   title: string;
@@ -259,6 +262,8 @@ export default function Home() {
   const [priorities, setPriorities] = useState('');
   const [selectedModel, setSelectedModel] = useState(DEFAULT_MODEL);
   const [selectedProfile, setSelectedProfile] = useState('minimal');
+  const [skills, setSkills] = useState<SkillSummary[]>([]);
+  const [selectedSkill, setSelectedSkill] = useState('none');
   const [workingDirectory, setWorkingDirectory] = useState('');
   const [pickingWorkspace, setPickingWorkspace] = useState(false);
   const [pickingBrowserFolder, setPickingBrowserFolder] = useState(false);
@@ -321,6 +326,9 @@ export default function Home() {
     requestJson<ModelCatalogEntry[]>('/api/models/catalog?kind=chat')
       .then((result) => startTransition(() => setModelCatalog(result)))
       .catch(() => startTransition(() => setModelCatalog([])));
+    requestJson<SkillSummary[]>('/api/skills')
+      .then((result) => startTransition(() => setSkills(result)))
+      .catch(() => startTransition(() => setSkills([])));
   }, [refreshConversations, authChecked]);
   /* oxlint-enable react/react-compiler */
 
@@ -504,6 +512,7 @@ export default function Home() {
                 provider: chatProvider,
                 model: chatModel,
                 profile: selectedProfile,
+                skill: selectedSkill === 'none' ? null : selectedSkill,
                 working_directory: workingDirectory.trim() || null,
                 browser_workspace: Boolean(browserWorkspace),
                 image: image
@@ -536,7 +545,7 @@ export default function Home() {
         setIsSending(false);
       }
     },
-    [createConversation, refreshConversations, selectedModel, selectedProfile, workingDirectory, browserWorkspace],
+    [createConversation, refreshConversations, selectedModel, selectedProfile, selectedSkill, workingDirectory, browserWorkspace],
   );
 
   async function sendMessage(event?: { preventDefault: () => void }) {
@@ -862,6 +871,19 @@ export default function Home() {
                     <SelectItem value="unreal">Unreal</SelectItem>
                   </>
                 )}
+              </SelectContent>
+            </Select>
+            <Select onValueChange={(value) => setSelectedSkill(value as string)} value={selectedSkill}>
+              <SelectTrigger aria-label="Choose skill" className="composer-tab-trigger" size="sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">No skill</SelectItem>
+                {skills.map((skill) => (
+                  <SelectItem key={skill.name} value={skill.name}>
+                    {skill.name}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>

@@ -88,6 +88,7 @@ class ConversationStore:
                     profile TEXT NOT NULL,
                     working_directory TEXT NOT NULL,
                     browser_workspace INTEGER NOT NULL DEFAULT 0,
+                    skill TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     resolved_at TEXT,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
@@ -162,6 +163,8 @@ class ConversationStore:
             tool_call_columns = {row["name"] for row in connection.execute("PRAGMA table_info(tool_calls)").fetchall()}
             if "browser_workspace" not in tool_call_columns:
                 connection.execute("ALTER TABLE tool_calls ADD COLUMN browser_workspace INTEGER NOT NULL DEFAULT 0")
+            if "skill" not in tool_call_columns:
+                connection.execute("ALTER TABLE tool_calls ADD COLUMN skill TEXT NOT NULL DEFAULT ''")
             conversation_columns = {row["name"] for row in connection.execute("PRAGMA table_info(conversations)").fetchall()}
             if "owner_id" not in conversation_columns:
                 connection.execute("ALTER TABLE conversations ADD COLUMN owner_id TEXT REFERENCES users(id)")
@@ -683,6 +686,7 @@ class ConversationStore:
         profile: str,
         working_directory: str,
         browser_workspace: bool = False,
+        skill: str = "",
     ) -> dict:
         self.get_conversation(conversation_id, owner_id)
         timestamp = _now()
@@ -690,8 +694,8 @@ class ConversationStore:
             connection.execute(
                 "INSERT INTO tool_calls "
                 "(id, conversation_id, tool_name, arguments_json, risk_level, status, "
-                "provider, model, profile, working_directory, browser_workspace, created_at) "
-                "VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)",
+                "provider, model, profile, working_directory, browser_workspace, skill, created_at) "
+                "VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)",
                 (
                     tool_call_id,
                     conversation_id,
@@ -703,6 +707,7 @@ class ConversationStore:
                     profile,
                     working_directory,
                     int(browser_workspace),
+                    skill,
                     timestamp,
                 ),
             )

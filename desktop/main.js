@@ -35,8 +35,15 @@ const WEB_PORT = 3200;
 // the other unless they match exactly.
 //
 // Dev mode: vinext/Vite's dev server always binds the IPv6 loopback (::1)
-// - it ignores --host - so the backend is bound to ::1 too and both are
-// addressed as "localhost", which resolves to ::1 on this machine.
+// - it ignores --host - so the backend is bound to ::1 too. Both are
+// addressed by the IPv6 literal directly ("[::1]") rather than the name
+// "localhost" - on a machine with a VPN client active, Node's fetch()
+// (used below in waitForServer and the auto-login) resolved "localhost" to
+// ::1 fine, but Electron's own BrowserWindow (a separate, sandboxed
+// Chromium network service, not Node) got ERR_FAILED trying it - most
+// likely 127.0.0.1 first, where nothing listens. Addressing ::1 by its
+// literal sidesteps hostname resolution for both paths entirely instead of
+// relying on it agreeing with Node's.
 //
 // Packaged mode: the frontend's production server (desktop/build-web.ps1
 // -> web/prod-server.js) has no such constraint, but the backend's URL is
@@ -44,12 +51,12 @@ const WEB_PORT = 3200;
 // desktop/build-web.ps1's $BackendUrl) - that value, "127.0.0.1:8765", is
 // what packaged mode must actually bind/talk to, and can't be changed here
 // at launch time.
-const BACKEND_HOST = app.isPackaged ? '127.0.0.1' : 'localhost';
+const BACKEND_HOST = app.isPackaged ? '127.0.0.1' : '[::1]';
 const BACKEND_BIND_HOST = app.isPackaged ? '127.0.0.1' : '::1';
 const BACKEND_URL = `http://${BACKEND_HOST}:${BACKEND_PORT}`;
 // Must be the exact same hostname string as BACKEND_HOST above, for the
 // cookie-scoping reason explained in the comment above.
-const WEB_HOST = app.isPackaged ? '127.0.0.1' : 'localhost';
+const WEB_HOST = app.isPackaged ? '127.0.0.1' : '[::1]';
 const WEB_URL = `http://${WEB_HOST}:${WEB_PORT}`;
 
 const LOCAL_ACCOUNT = { email: 'local@samida.desktop', password: 'samida-desktop-local-user' };

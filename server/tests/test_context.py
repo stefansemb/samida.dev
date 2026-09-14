@@ -1,8 +1,10 @@
 from pathlib import Path
 
+import pytest
+
 import samida.context as context_module
 from samida.config import Settings
-from samida.context import CORE_FILES, MEMORY_FILE_ABSTRACTS, ContextBuilder
+from samida.context import CORE_FILES, MEMORY_FILE_ABSTRACTS, ContextBuilder, ContextError
 from samida.schemas import ChatMessage
 
 
@@ -94,6 +96,27 @@ async def test_semantic_fallback_failure_degrades_to_keyword_only(monkeypatch) -
     )
 
     assert not any(path.startswith("memory/") for path in context.included_files)
+
+
+async def test_active_skill_is_loaded_into_prompt_and_included_files(tmp_path: Path) -> None:
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    (skills_dir / "research-report.md").write_text("# Objective\nWrite a short report.\n", encoding="utf-8")
+
+    context = await ContextBuilder(PROJECT_ROOT, skills_root=skills_dir).build(
+        [ChatMessage(role="user", content="Skriv en rapport om X.")],
+        skill="research-report",
+    )
+
+    assert "skills/research-report.md" in context.included_files
+    assert "Write a short report." in context.system_message.content
+    assert "ACTIVE SKILL: research-report" in context.system_message.content
+
+
+async def test_unknown_skill_raises_context_error(tmp_path: Path) -> None:
+    builder = ContextBuilder(PROJECT_ROOT, skills_root=tmp_path / "skills")
+    with pytest.raises(ContextError):
+        await builder.build([ChatMessage(role="user", content="Hej")], skill="does-not-exist")
 
 
 async def test_semantic_fallback_disabled_never_calls_embeddings(monkeypatch) -> None:

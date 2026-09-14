@@ -100,6 +100,10 @@ class WorkspacePickResponse(BaseModel):
     path: str | None = None
 
 
+class SkillSummary(BaseModel):
+    name: str
+
+
 class HealthResponse(BaseModel):
     status: Literal["ok", "degraded"]
     ollama_reachable: bool
@@ -163,6 +167,7 @@ class ConversationChatRequest(BaseModel):
     profile: Literal["minimal", "samida-standard", "coding", "jarvis", "unreal"] = "minimal"
     working_directory: str | None = None
     browser_workspace: bool = False
+    skill: str | None = Field(default=None, max_length=100)
 
     @model_validator(mode="after")
     def require_text_or_image(self) -> "ConversationChatRequest":

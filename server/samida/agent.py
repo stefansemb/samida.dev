@@ -24,6 +24,11 @@ from samida.weather import WeatherClient, WeatherError
 
 MAX_TOOL_ITERATIONS = 4
 
+# A skill/workflow is a multi-step checklist (research, write, verify, ...) and
+# routinely needs more tool calls in a row than ordinary chat - validated in
+# samidax's standalone harness, where real workflows took 3-8 tool calls.
+SKILL_MAX_TOOL_ITERATIONS = 15
+
 # In browser-workspace mode, none of these can run on the server (there's no
 # server-side directory) - the client executes them and reports back via
 # resume_after_decision, same as a human's write_file approval today.
@@ -248,6 +253,7 @@ async def run_turn(
     notes_context: NotesToolContext | None = None,
     google_context: GoogleToolContext | None = None,
     browser_workspace: bool = False,
+    max_iterations: int = MAX_TOOL_ITERATIONS,
 ) -> AgentTurnOutcome:
     """Run model turns, auto-executing low-risk tool calls, until a final message
     or a confirmation-required tool call is produced. A medium-risk tool
@@ -258,7 +264,7 @@ async def run_turn(
     working = list(messages)
     generated_image_filename: str | None = None
 
-    for _ in range(MAX_TOOL_ITERATIONS):
+    for _ in range(max_iterations):
         result = await provider.chat(working, model, tools)
         resolved_model = result.resolved_model
         model = resolved_model
@@ -342,6 +348,7 @@ async def resume_after_decision(
     notes_context: NotesToolContext | None = None,
     google_context: GoogleToolContext | None = None,
     browser_workspace: bool = False,
+    max_iterations: int = MAX_TOOL_ITERATIONS,
 ) -> AgentTurnOutcome:
     working = [*messages, _proposal_message(call), _result_message(call, result_payload)]
     return await run_turn(
@@ -357,4 +364,5 @@ async def resume_after_decision(
         notes_context=notes_context,
         google_context=google_context,
         browser_workspace=browser_workspace,
+        max_iterations=max_iterations,
     )

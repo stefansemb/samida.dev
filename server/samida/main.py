@@ -8,7 +8,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
-from samida import agent, auth, rate_limit, tools as tool_impl
+from samida import agent, auth, rate_limit, skills as skill_impl, tools as tool_impl
 from samida.config import Settings, get_settings
 from samida.context import ContextBuilder, ContextError
 from samida.crypto import CryptoError, encrypt_secret
@@ -52,6 +52,7 @@ from samida.schemas import (
     StoredMessage,
     ResearchReport,
     Reminder, ReminderCreate,
+    SkillSummary,
     ToolCallDecisionResponse,
     UserPublic,
     LoginRequest,
@@ -481,6 +482,14 @@ async def preview_context(
     )
 
 
+@app.get("/api/skills", response_model=list[SkillSummary])
+def list_skills(
+    context_builder: ContextBuilder = Depends(get_context_builder),
+    user: auth.User = Depends(auth.get_current_user),
+) -> list[SkillSummary]:
+    return [SkillSummary(name=name) for name in skill_impl.list_skills(context_builder.skills_root)]
+
+
 @app.get("/api/conversations", response_model=list[ConversationSummary])
 def list_conversations(
     store: ConversationStore = Depends(get_conversation_store),
@@ -682,7 +691,11 @@ async def conversation_chat(
         )
         caller_is_owner = auth.is_owner(user.email, settings)
         context = await context_builder.build(
-            [*context_messages, current], request.profile, request.working_directory, is_owner=caller_is_owner
+            [*context_messages, current],
+            request.profile,
+            request.working_directory,
+            is_owner=caller_is_owner,
+            skill=request.skill,
         )
         model_history = [
             ChatMessage.model_validate(message)
@@ -697,6 +710,7 @@ async def conversation_chat(
         image_context = agent.ImageToolContext(providers=image_providers, store=store)
         notes_context = agent.NotesToolContext(store=store, user_id=user.id)
         google_context = agent.GoogleToolContext(integration=GoogleIntegration(store, settings, user.id))
+        max_iterations = agent.SKILL_MAX_TOOL_ITERATIONS if request.skill else agent.MAX_TOOL_ITERATIONS
         turn = await agent.run_turn(
             provider,
             resolved_model,
@@ -714,6 +728,7 @@ async def conversation_chat(
             notes_context=notes_context,
             google_context=google_context,
             browser_workspace=request.browser_workspace,
+            max_iterations=max_iterations,
         )
 
         pending_tool_call: PendingToolCall | None = None
@@ -732,6 +747,7 @@ async def conversation_chat(
                 request.profile,
                 request.working_directory or "",
                 browser_workspace=request.browser_workspace,
+                skill=request.skill or "",
             )
             conversation, user_message, assistant_message = store.add_exchange(
                 conversation_id,
@@ -988,10 +1004,11 @@ async def _resolve_tool_call(
         )
         store.resolve_tool_call(tool_call_id, owner_id, status=status, result=outcome)
 
+        active_skill = record["skill"] or None
         history = [StoredMessage.model_validate(item) for item in store.messages(conversation_id, owner_id)]
         context_messages = [ChatMessage(role=item.role, content=item.content or "[Screenshot]") for item in history]
         context = await context_builder.build(
-            context_messages, record["profile"], record["working_directory"], is_owner=is_owner
+            context_messages, record["profile"], record["working_directory"], is_owner=is_owner, skill=active_skill
         )
         model_history = [ChatMessage.model_validate(item) for item in store.model_messages(conversation_id, owner_id)]
         provider, _resolved = await factory.build(record["provider"], record["model"])
@@ -999,6 +1016,7 @@ async def _resolve_tool_call(
         image_context = agent.ImageToolContext(providers=image_providers, store=store)
         notes_context = agent.NotesToolContext(store=store, user_id=owner_id)
         google_context = agent.GoogleToolContext(integration=GoogleIntegration(store, settings, owner_id))
+        max_iterations = agent.SKILL_MAX_TOOL_ITERATIONS if active_skill else agent.MAX_TOOL_ITERATIONS
 
         turn = await agent.resume_after_decision(
             provider,
@@ -1015,6 +1033,7 @@ async def _resolve_tool_call(
             notes_context=notes_context,
             google_context=google_context,
             browser_workspace=record["browser_workspace"],
+            max_iterations=max_iterations,
         )
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1040,6 +1059,7 @@ async def _resolve_tool_call(
             record["profile"],
             record["working_directory"],
             browser_workspace=record["browser_workspace"],
+            skill=record["skill"],
         )
         conversation, assistant_message = store.append_assistant_message(
             conversation_id,
