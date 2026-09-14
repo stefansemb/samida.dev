@@ -404,13 +404,13 @@ class ConversationStore:
             if query:
                 rows = connection.execute(
                     "SELECT id, content, created_at FROM notes WHERE owner_id = ? "
-                    "AND content LIKE ? ORDER BY created_at DESC LIMIT ?",
+                    "AND content LIKE ? ORDER BY created_at DESC, rowid DESC LIMIT ?",
                     (owner_id, f"%{query}%", limit),
                 ).fetchall()
             else:
                 rows = connection.execute(
                     "SELECT id, content, created_at FROM notes WHERE owner_id = ? "
-                    "ORDER BY created_at DESC LIMIT ?",
+                    "ORDER BY created_at DESC, rowid DESC LIMIT ?",
                     (owner_id, limit),
                 ).fetchall()
         return [dict(row) for row in rows]
