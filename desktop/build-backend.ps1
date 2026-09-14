@@ -30,16 +30,18 @@ if (Test-Path $DistPath) { Remove-Item -Recurse -Force $DistPath }
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE" }
 
 # Generic, static content that SAMIDA_PROJECT_ROOT points at in a packaged
-# install (see desktop/main.js) - instructions/ and AGENT.md are safe to
-# ship to every install. memory/ is deliberately NOT copied here: it's the
-# owner's personal data (see server/samida/context.py's MEMORY_ROUTES) and
-# must never end up in the installer - each install gets its own empty,
-# writable memory dir under Electron's userData instead.
+# install (see desktop/main.js) - instructions/, AGENT.md and skills/ are
+# safe to ship to every install. memory/ is deliberately NOT copied here:
+# it's the owner's personal data (see server/samida/context.py's
+# MEMORY_ROUTES) and must never end up in the installer - each install
+# gets its own empty, writable memory dir under Electron's userData
+# instead.
 $ContentDir = Join-Path $RepoRoot 'desktop\build\content'
 if (Test-Path $ContentDir) { Remove-Item -Recurse -Force $ContentDir }
 New-Item -ItemType Directory -Force -Path $ContentDir | Out-Null
 Copy-Item -Recurse (Join-Path $RepoRoot 'instructions') (Join-Path $ContentDir 'instructions')
 Copy-Item (Join-Path $RepoRoot 'AGENT.md') $ContentDir
+Copy-Item -Recurse (Join-Path $RepoRoot 'skills') (Join-Path $ContentDir 'skills')
 
 Write-Host "Backend frozen to $DistPath\samida-backend\samida-backend.exe"
 Write-Host "Static content staged to $ContentDir"

@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -62,6 +63,13 @@ def test_list_directory_skips_dotfiles_and_hidden_dirs(workspace: Path) -> None:
     result = list_directory(workspace, ".")
     names = {entry["name"] for entry in result["entries"]}
     assert names == {"notes.txt", "sub"}
+
+
+def test_list_directory_reports_a_real_modified_timestamp(workspace: Path) -> None:
+    result = list_directory(workspace, ".")
+    entry = next(e for e in result["entries"] if e["name"] == "notes.txt")
+    assert entry["modified"]
+    datetime.fromisoformat(entry["modified"])
 
 
 @pytest.fixture

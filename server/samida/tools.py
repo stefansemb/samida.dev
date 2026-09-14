@@ -273,11 +273,15 @@ def list_directory(workspace: Path, relative_path: str = ".") -> dict:
     for child in sorted(target.iterdir(), key=lambda p: p.name.lower()):
         if child.name.startswith(".") or child.name in _SKIP_NAMES:
             continue
+        stat = child.stat()
         entries.append(
             {
                 "name": child.name,
                 "type": "dir" if child.is_dir() else "file",
-                "size": None if child.is_dir() else child.stat().st_size,
+                "size": None if child.is_dir() else stat.st_size,
+                # So the model can state a real modified date instead of
+                # guessing one when asked about an existing file.
+                "modified": datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat(),
             }
         )
     return {"path": relative_path, "entries": entries}
