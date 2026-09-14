@@ -1,6 +1,6 @@
 {
   "name": "samida-desktop",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "description": "SAMIDA Desktop - runs the assistant fully locally, no server or account needed.",
   "author": "Stefan Semb",
