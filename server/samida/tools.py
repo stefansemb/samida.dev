@@ -4,6 +4,15 @@ from pathlib import Path
 
 MAX_READ_BYTES = 200_000
 
+MEMORY_FILE_ALLOWLIST = (
+    "memory/personal.md",
+    "memory/preferences.md",
+    "memory/priorities.md",
+    "memory/projects.md",
+    "memory/technical-context.md",
+    "memory/lessons.md",
+)
+
 GENERAL_TOOL_SPECS: list[dict] = [
     {
         "name": "web_search",
@@ -140,6 +149,34 @@ GENERAL_TOOL_SPECS: list[dict] = [
             "required": [],
         },
     },
+    {
+        "name": "update_memory",
+        "description": (
+            "Propose adding a durable fact, preference, project update, or lesson to the "
+            "owner's structured long-term memory. Only available to the account owner. "
+            "Always requires the owner's explicit approval before anything is written - "
+            "never assume consent."
+        ),
+        "risk": "medium",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "file": {
+                    "type": "string",
+                    "description": "Which memory file this belongs in.",
+                    "enum": list(MEMORY_FILE_ALLOWLIST),
+                },
+                "content": {
+                    "type": "string",
+                    "description": (
+                        "The text to add, written in the same prose style as the target "
+                        "file's existing content."
+                    ),
+                },
+            },
+            "required": ["file", "content"],
+        },
+    },
 ]
 
 WORKSPACE_TOOL_SPECS: list[dict] = [
@@ -265,6 +302,25 @@ def write_file(workspace: Path, relative_path: str, content: str) -> dict:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
     return {"path": relative_path, "bytes_written": len(content.encode("utf-8"))}
+
+
+def append_memory_entry(memory_root: Path, relative_path: str, content: str) -> dict:
+    # Memory files are a small fixed set the model may propose additions to -
+    # unlike write_file's open workspace, this is an allowlist, not general
+    # path traversal. Appending a distinct, dated section (never editing
+    # existing text) keeps every proposal a visible diff for the human to
+    # review, per instructions/memory-policy.md's "conflicting facts must
+    # not silently replace each other" rule.
+    if relative_path not in MEMORY_FILE_ALLOWLIST:
+        raise WorkspaceError(f"Unknown memory file: {relative_path}")
+    if not content.strip():
+        raise WorkspaceError("The memory content must not be empty.")
+    target = (memory_root.resolve() / relative_path[len("memory/") :]).resolve()
+    date = datetime.now(UTC).date().isoformat()
+    entry = f"\n\n## Tillagt {date} (föreslaget av SAMIDA)\n{content.strip()}\n"
+    with target.open("a", encoding="utf-8") as handle:
+        handle.write(entry)
+    return {"path": relative_path, "bytes_written": len(entry.encode("utf-8"))}
 
 
 def log_tool_call(

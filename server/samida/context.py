@@ -2,7 +2,11 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from samida.config import Settings
+from samida.embeddings import cosine_similarity, embed_text
 from samida.schemas import ChatMessage
+
+_SEMANTIC_FALLBACK_THRESHOLD = 0.55
 
 
 CORE_FILES = ("instructions/minimal.md",)
@@ -75,6 +79,15 @@ MEMORY_ROUTES = {
     },
 }
 
+MEMORY_FILE_ABSTRACTS: dict[str, str] = {
+    "memory/personal.md": "Stable personal facts about Stefan: family, age, birthday, close people.",
+    "memory/preferences.md": "How SAMIDA should communicate and work, and which models/settings Stefan prefers.",
+    "memory/priorities.md": "Stefan's current goals, priorities, and near-term plans.",
+    "memory/projects.md": "Status and decisions for Stefan's ongoing projects (SAMIDA, games, web projects).",
+    "memory/technical-context.md": "Stefan's hardware, OS, dev tools, and technical skill level.",
+    "memory/lessons.md": "Verified lessons and past mistakes worth remembering.",
+}
+
 
 @dataclass(frozen=True)
 class BuiltContext:
@@ -87,11 +100,18 @@ class ContextError(RuntimeError):
 
 
 class ContextBuilder:
-    def __init__(self, content_root: Path, memory_root: Path | None = None) -> None:
+    def __init__(
+        self,
+        content_root: Path,
+        memory_root: Path | None = None,
+        settings: Settings | None = None,
+    ) -> None:
         self.content_root = content_root.resolve()
         self.memory_root = (memory_root or self.content_root / "memory").resolve()
+        self.settings = settings
+        self._abstract_embeddings: dict[str, list[float]] | None = None
 
-    def build(
+    async def build(
         self,
         messages: list[ChatMessage],
         profile: str = "minimal",
@@ -107,7 +127,7 @@ class ContextBuilder:
             message.content for message in messages if message.role == "user"
         )
         selected = (
-            [*PROFILE_FILES.get(effective_profile, CORE_FILES), *self._select_memory(query)]
+            [*PROFILE_FILES.get(effective_profile, CORE_FILES), *await self._select_memory(query)]
             if effective_profile != "minimal"
             else list(CORE_FILES)
         )
@@ -128,7 +148,7 @@ class ContextBuilder:
             included_files=included_files,
         )
 
-    def _select_memory(self, query: str) -> list[str]:
+    async def _select_memory(self, query: str) -> list[str]:
         normalized_query = query.casefold()
         tokens = set(re.findall(r"[\wåäöÅÄÖ+]+", normalized_query))
         selected: list[str] = []
@@ -141,7 +161,33 @@ class ContextBuilder:
             and "memory/personal.md" not in selected
         ):
             selected.append("memory/personal.md")
+        if not selected and query.strip():
+            fallback = await self._semantic_fallback(query)
+            if fallback is not None:
+                selected.append(fallback)
         return selected
+
+    async def _semantic_fallback(self, query: str) -> str | None:
+        if self.settings is None or not self.settings.memory_semantic_fallback_enabled:
+            return None
+        query_embedding = await embed_text(query, self.settings)
+        if query_embedding is None:
+            return None
+        if self._abstract_embeddings is None:
+            embeddings: dict[str, list[float]] = {}
+            for relative_path, abstract in MEMORY_FILE_ABSTRACTS.items():
+                embedding = await embed_text(abstract, self.settings)
+                if embedding is not None:
+                    embeddings[relative_path] = embedding
+            self._abstract_embeddings = embeddings
+        best_path: str | None = None
+        best_score = _SEMANTIC_FALLBACK_THRESHOLD
+        for relative_path, abstract_embedding in self._abstract_embeddings.items():
+            score = cosine_similarity(query_embedding, abstract_embedding)
+            if score > best_score:
+                best_score = score
+                best_path = relative_path
+        return best_path
 
     def _load(self, relative_path: str, *, optional: bool = False) -> str | None:
         if relative_path.startswith("memory/"):

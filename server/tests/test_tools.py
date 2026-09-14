@@ -2,7 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from samida.tools import WorkspaceError, list_directory, read_file, resolve_in_workspace, write_file
+from samida.tools import (
+    WorkspaceError,
+    append_memory_entry,
+    list_directory,
+    read_file,
+    resolve_in_workspace,
+    write_file,
+)
 
 
 @pytest.fixture
@@ -55,3 +62,29 @@ def test_list_directory_skips_dotfiles_and_hidden_dirs(workspace: Path) -> None:
     result = list_directory(workspace, ".")
     names = {entry["name"] for entry in result["entries"]}
     assert names == {"notes.txt", "sub"}
+
+
+@pytest.fixture
+def memory_root(tmp_path: Path) -> Path:
+    (tmp_path / "projects.md").write_text("# Projekt\n\nBefintligt innehåll.\n", encoding="utf-8")
+    return tmp_path
+
+
+def test_append_memory_entry_adds_dated_section_without_touching_existing_text(memory_root: Path) -> None:
+    result = append_memory_entry(memory_root, "memory/projects.md", "Nytt beslut om X.")
+
+    content = (memory_root / "projects.md").read_text(encoding="utf-8")
+    assert content.startswith("# Projekt\n\nBefintligt innehåll.\n")
+    assert "Nytt beslut om X." in content
+    assert "föreslaget av SAMIDA" in content
+    assert result["bytes_written"] > 0
+
+
+def test_append_memory_entry_rejects_unknown_file(memory_root: Path) -> None:
+    with pytest.raises(WorkspaceError):
+        append_memory_entry(memory_root, "memory/../../etc/passwd", "nej")
+
+
+def test_append_memory_entry_rejects_empty_content(memory_root: Path) -> None:
+    with pytest.raises(WorkspaceError):
+        append_memory_entry(memory_root, "memory/projects.md", "   ")

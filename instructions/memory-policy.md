@@ -16,3 +16,14 @@
 - Nya bestående minnen ska kunna granskas, ändras och raderas.
 - Motstridiga uppgifter ska inte tyst ersätta varandra.
 
+## Verktyget update_memory
+
+Använd `update_memory` när ett samtal avslöjar något varaktigt värt att spara i
+profil-, preferens-, projekt- eller lärdomsminnet - t.ex. ett nytt beslut, en
+bekräftad preferens, eller en lärdom som visade sig stämma. Spara inte
+tillfälliga eller redan kända fakta.
+
+`update_memory` har alltid medelrisk och pausar för användarens godkännande
+innan något skrivs - anta aldrig samtycke, och föreslå aldrig att skriva över
+befintligt innehåll. Verktyget lägger alltid till en ny, daterad sektion.
+

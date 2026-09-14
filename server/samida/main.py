@@ -430,7 +430,7 @@ async def chat(
     user: auth.User = Depends(auth.get_current_user),
 ) -> ChatResponse:
     try:
-        context = context_builder.build(
+        context = await context_builder.build(
             request.messages, request.profile, request.working_directory, is_owner=auth.is_owner(user.email, settings)
         )
         selected_model = request.model
@@ -466,7 +466,7 @@ async def preview_context(
     user: auth.User = Depends(auth.get_current_user),
 ) -> ContextPreviewResponse:
     try:
-        context = context_builder.build(request.messages)
+        context = await context_builder.build(request.messages)
     except ContextError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return ContextPreviewResponse(
@@ -675,7 +675,7 @@ async def conversation_chat(
             images=[image_base64] if image_base64 else [],
         )
         caller_is_owner = auth.is_owner(user.email, settings)
-        context = context_builder.build(
+        context = await context_builder.build(
             [*context_messages, current], request.profile, request.working_directory, is_owner=caller_is_owner
         )
         model_history = [
@@ -807,6 +807,9 @@ def _tool_proposal_text(call: ToolCallRequest) -> str:
         content = call.arguments.get("content", "")
         lines = content.count("\n") + 1 if content else 0
         return f'Proposing to write to "{path}" ({lines} lines). Waiting for your approval.'
+    if call.name == "update_memory":
+        path = call.arguments.get("file", "?")
+        return f'Proposing to add a note to "{path}". Waiting for your approval.'
     return f"Proposing to run the tool {call.name}. Waiting for your approval."
 
 
@@ -953,7 +956,16 @@ async def _resolve_tool_call(
             status = "failed" if "error" in outcome else "executed"
         elif approve:
             try:
-                outcome = tool_impl.write_file(workspace, target, call.arguments.get("content", ""))
+                if call.name == "update_memory":
+                    if not is_owner:
+                        raise tool_impl.WorkspaceError("Memory files are only available for the account owner.")
+                    outcome = tool_impl.append_memory_entry(
+                        settings.resolved_memory_dir(),
+                        call.arguments.get("file", ""),
+                        call.arguments.get("content", ""),
+                    )
+                else:
+                    outcome = tool_impl.write_file(workspace, target, call.arguments.get("content", ""))
                 status = "executed"
             except tool_impl.WorkspaceError as exc:
                 outcome = {"error": str(exc)}
@@ -973,7 +985,7 @@ async def _resolve_tool_call(
 
         history = [StoredMessage.model_validate(item) for item in store.messages(conversation_id, owner_id)]
         context_messages = [ChatMessage(role=item.role, content=item.content or "[Screenshot]") for item in history]
-        context = context_builder.build(
+        context = await context_builder.build(
             context_messages, record["profile"], record["working_directory"], is_owner=is_owner
         )
         model_history = [ChatMessage.model_validate(item) for item in store.model_messages(conversation_id, owner_id)]

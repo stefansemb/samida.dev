@@ -127,3 +127,67 @@ async def test_client_result_rejected_when_call_is_not_browser_workspace(store: 
         app.dependency_overrides.clear()
 
     assert response.status_code == 400
+
+
+class _ImmediateFinalProvider:
+    name = "ollama"
+
+    async def chat(self, messages: list[ChatMessage], model: str | None = None, tools: list[dict] | None = None) -> ChatTurnResult:
+        return ChatTurnResult(resolved_model="test-model", message=ChatMessage(role="assistant", content="Sparat."))
+
+
+@pytest.mark.asyncio
+async def test_update_memory_approval_writes_to_memory_file_for_owner(store: ConversationStore, owner_id: str, tmp_path: Path) -> None:
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    (memory_dir / "projects.md").write_text("# Projekt\n\nBefintligt.\n", encoding="utf-8")
+    conversation = store.create_conversation(owner_id)
+    store.create_pending_tool_call(
+        conversation["id"], owner_id, "call-1", "update_memory",
+        {"file": "memory/projects.md", "content": "Nytt beslut."},
+        "medium", "ollama", "test-model", "samida-standard", "",
+    )
+
+    app.dependency_overrides[get_conversation_store] = lambda: store
+    app.dependency_overrides[get_chat_provider_factory] = lambda: _FakeChatProviderFactory(_ImmediateFinalProvider())
+    app.dependency_overrides[get_settings] = lambda: Settings(owner_email="owner@example.com", memory_dir=memory_dir)
+    app.dependency_overrides[auth.get_current_user] = lambda: auth.User(id=owner_id, email="owner@example.com", tier="full")
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(f"/api/conversations/{conversation['id']}/tool-calls/call-1/approve")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    content = (memory_dir / "projects.md").read_text(encoding="utf-8")
+    assert "Nytt beslut." in content
+    assert "Befintligt." in content
+
+
+@pytest.mark.asyncio
+async def test_update_memory_approval_rejected_for_non_owner(store: ConversationStore, tmp_path: Path) -> None:
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    (memory_dir / "projects.md").write_text("# Projekt\n\nBefintligt.\n", encoding="utf-8")
+    guest_id = store.create_user("guest@example.com", "hash")["id"]
+    conversation = store.create_conversation(guest_id)
+    store.create_pending_tool_call(
+        conversation["id"], guest_id, "call-1", "update_memory",
+        {"file": "memory/projects.md", "content": "Smygtillägg."},
+        "medium", "ollama", "test-model", "minimal", "",
+    )
+
+    app.dependency_overrides[get_conversation_store] = lambda: store
+    app.dependency_overrides[get_chat_provider_factory] = lambda: _FakeChatProviderFactory(_ImmediateFinalProvider())
+    app.dependency_overrides[get_settings] = lambda: Settings(owner_email="owner@example.com", memory_dir=memory_dir)
+    app.dependency_overrides[auth.get_current_user] = lambda: auth.User(id=guest_id, email="guest@example.com", tier="full")
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(f"/api/conversations/{conversation['id']}/tool-calls/call-1/approve")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    content = (memory_dir / "projects.md").read_text(encoding="utf-8")
+    assert "Smygtillägg." not in content
+    assert content == "# Projekt\n\nBefintligt.\n"

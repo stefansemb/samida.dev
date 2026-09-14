@@ -38,6 +38,7 @@ _TARGET_ARG_BY_TOOL: dict[str, str] = {
     "save_note": "content",
     "recall_notes": "query",
     "list_recent_emails": "query",
+    "update_memory": "file",
 }
 
 

@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     ollama_chat_model: str = "gemma4:e4b"
     ollama_vision_model: str = "qwen3-vl:8b"
     ollama_api_key: str | None = None
+    embedding_model: str | None = None
+    memory_semantic_fallback_enabled: bool = True
     openai_api_key: str | None = Field(
         default=None,
         validation_alias="OPENAI_API_KEY",
