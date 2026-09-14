@@ -9,6 +9,7 @@ from samida.providers.base import ChatTurnResult, ProviderError, ToolCallRequest
 from samida.providers.image_base import ImageGenerationResult
 from samida.schemas import ChatMessage
 from samida.search import SearchResult
+from samida.simple_fetch import SimpleFetchError
 from samida.weather import DailyForecast, WeatherError, WeatherForecast
 
 
@@ -222,15 +223,33 @@ async def test_fetch_page_tool_truncates_long_pages() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fetch_page_tool_surfaces_camofox_error() -> None:
+async def test_fetch_page_tool_falls_back_to_simple_fetch_on_camofox_error(monkeypatch) -> None:
+    async def fake_simple_fetch(url: str) -> str:
+        return "plain text content"
+
+    monkeypatch.setattr(agent, "simple_fetch", fake_simple_fetch)
     outcome = await agent.fetch_page_tool(_FailingCamoFoxClient(), "https://example.com")
-    assert outcome == {"error": "CamoFox kunde inte läsa sidan."}
+    assert outcome == {"url": "https://example.com", "content": "plain text content", "truncated": False}
 
 
 @pytest.mark.asyncio
-async def test_fetch_page_tool_without_client_returns_friendly_error() -> None:
+async def test_fetch_page_tool_without_client_falls_back_to_simple_fetch(monkeypatch) -> None:
+    async def fake_simple_fetch(url: str) -> str:
+        return "plain text content"
+
+    monkeypatch.setattr(agent, "simple_fetch", fake_simple_fetch)
     outcome = await agent.fetch_page_tool(None, "https://example.com")
-    assert outcome == {"error": "Page fetching is not configured on this server."}
+    assert outcome == {"url": "https://example.com", "content": "plain text content", "truncated": False}
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_tool_surfaces_simple_fetch_error_when_camofox_also_unavailable(monkeypatch) -> None:
+    async def failing_simple_fetch(url: str) -> str:
+        raise SimpleFetchError("Could not fetch the page.")
+
+    monkeypatch.setattr(agent, "simple_fetch", failing_simple_fetch)
+    outcome = await agent.fetch_page_tool(None, "https://example.com")
+    assert outcome == {"error": "Could not fetch the page."}
 
 
 class _FakeWeatherClient:

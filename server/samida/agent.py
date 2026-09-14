@@ -10,6 +10,8 @@ from samida.providers.base import ModelProvider, ProviderError, ToolCallRequest
 from samida.providers.image_base import ImageProvider
 from samida.schemas import ChatMessage
 from samida.search import SearchClient, SearchError
+from samida.simple_fetch import SimpleFetchError
+from samida.simple_fetch import fetch as simple_fetch
 from samida.storage import ConversationStore
 from samida.tools import (
     GENERAL_TOOL_SPECS,
@@ -118,13 +120,24 @@ MAX_FETCHED_PAGE_CHARS = 8_000
 
 
 async def fetch_page_tool(client: CamoFoxClient | None, url: str) -> dict:
-    if client is None:
-        return {"error": "Page fetching is not configured on this server."}
     if not url.strip():
         return {"error": "Please provide a URL."}
+    # CamoFox (a real, optional, separately-run browser) handles JS-heavy or
+    # bot-guarded pages that a plain HTTP request can't - but it's not
+    # bundled with SAMIDA (it would roughly triple the installer size), so
+    # most installs won't have it configured. Fall back to a lightweight,
+    # browser-less fetch instead of failing outright whenever it's missing
+    # or unreachable.
+    if client is not None:
+        try:
+            content = await client.snapshot(url)
+            truncated = content[:MAX_FETCHED_PAGE_CHARS]
+            return {"url": url, "content": truncated, "truncated": len(content) > MAX_FETCHED_PAGE_CHARS}
+        except CamoFoxError:
+            pass
     try:
-        content = await client.snapshot(url)
-    except CamoFoxError as exc:
+        content = await simple_fetch(url)
+    except SimpleFetchError as exc:
         return {"error": str(exc)}
     truncated = content[:MAX_FETCHED_PAGE_CHARS]
     return {"url": url, "content": truncated, "truncated": len(content) > MAX_FETCHED_PAGE_CHARS}
