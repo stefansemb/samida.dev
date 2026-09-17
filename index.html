@@ -316,6 +316,19 @@
     background: linear-gradient(155deg, var(--surface) 60%, color-mix(in srgb, var(--accent) 6%, var(--surface)));
   }
 
+  .project-card.wide { grid-column: span 2; }
+
+  .project-link {
+    align-self: flex-start;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+  }
+
+  .project-link:hover { border-bottom-color: var(--accent); }
+
   .project-top {
     display: flex;
     align-items: flex-start;
@@ -438,7 +451,8 @@
   @media (max-width: 860px) {
     .hero-grid { grid-template-columns: 1fr; }
     .projects { grid-template-columns: 1fr; }
-    .project-card.anchor { grid-column: span 1; }
+    .project-card.anchor,
+    .project-card.wide { grid-column: span 1; }
     .about-grid { grid-template-columns: 1fr; }
     nav.links { gap: 18px; font-size: 13.5px; }
   }
@@ -495,7 +509,7 @@
       <div class="wrap">
         <div class="section-head">
           <h2>What I'm building</h2>
-          <span class="count">03 active</span>
+          <span class="count">04 active</span>
         </div>
 
         <div class="projects">
@@ -518,6 +532,18 @@
             <p class="desc">An open-world pirate survival game — procedural river systems, an archipelago built in World Partition, and a slow, deliberate build.</p>
             <div class="project-tags">
               <span>Unreal Engine 5.7</span><span>C++</span>
+            </div>
+          </article>
+
+          <article class="project-card wide">
+            <div class="project-top">
+              <h3>samidatools</h3>
+              <span class="status-chip dev">In development</span>
+            </div>
+            <p class="desc">A small collection of focused web tools for creators. First up: YouTube thumbnails in your channel's own style — background removal runs right in the browser, so your photos never leave your device.</p>
+            <a class="project-link" href="https://samidatools.com/">samidatools.com ↗</a>
+            <div class="project-tags">
+              <span>HTML</span><span>MediaPipe</span><span>In-browser</span>
             </div>
           </article>
 
@@ -549,6 +575,7 @@
           <ul class="now-list">
             <li>Running SAMIDA on an always-on Ubuntu box, reachable only over Tailscale</li>
             <li>Building Pirate Survival's archipelago in Unreal Engine</li>
+            <li>Shaping the first tool for samidatools — thumbnails for YouTubers</li>
             <li>Keeping PinguHub's dozen-odd services alive</li>
           </ul>
         </div>
