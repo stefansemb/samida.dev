@@ -317,6 +317,7 @@
   }
 
   .project-card.wide { grid-column: span 2; }
+  .project-card.full { grid-column: 1 / -1; }
 
   .project-link {
     align-self: flex-start;
@@ -452,7 +453,8 @@
     .hero-grid { grid-template-columns: 1fr; }
     .projects { grid-template-columns: 1fr; }
     .project-card.anchor,
-    .project-card.wide { grid-column: span 1; }
+    .project-card.wide,
+    .project-card.full { grid-column: span 1; }
     .about-grid { grid-template-columns: 1fr; }
     nav.links { gap: 18px; font-size: 13.5px; }
   }
@@ -509,7 +511,7 @@
       <div class="wrap">
         <div class="section-head">
           <h2>What I'm building</h2>
-          <span class="count">04 active</span>
+          <span class="count">05 active</span>
         </div>
 
         <div class="projects">
@@ -537,13 +539,13 @@
 
           <article class="project-card wide">
             <div class="project-top">
-              <h3>samidatools</h3>
-              <span class="status-chip dev">In development</span>
+              <h3>Arqen</h3>
+              <span class="status-chip active">Active</span>
             </div>
-            <p class="desc">A small collection of focused web tools for creators. First up: YouTube thumbnails in your channel's own style — background removal runs right in the browser, so your photos never leave your device.</p>
-            <a class="project-link" href="https://samidatools.com/">samidatools.com ↗</a>
+            <p class="desc">A Windows AI assistant with a Mission Control for agents. Tasks, workflows and schedules run in the background, each agent gets exactly the tools it needs — files, web, GitHub, Google, MCP — and anything that can't be undone waits for my approval. Open source, in English and Swedish.</p>
+            <a class="project-link" href="https://github.com/stefansemb/Arqen">github.com/stefansemb/Arqen ↗</a>
             <div class="project-tags">
-              <span>HTML</span><span>MediaPipe</span><span>In-browser</span>
+              <span>Python</span><span>PyQt6</span><span>MCP</span><span>Ollama</span><span>MIT</span>
             </div>
           </article>
 
@@ -555,6 +557,18 @@
             <p class="desc">The self-hosted server everything else runs on — media, automation, and a handful of always-on services I maintain myself.</p>
             <div class="project-tags">
               <span>Ubuntu</span><span>systemd</span><span>Docker</span>
+            </div>
+          </article>
+
+          <article class="project-card full">
+            <div class="project-top">
+              <h3>samidatools</h3>
+              <span class="status-chip dev">In development</span>
+            </div>
+            <p class="desc">A small collection of focused web tools for creators. First up: YouTube thumbnails in your channel's own style — background removal runs right in the browser, so your photos never leave your device.</p>
+            <a class="project-link" href="https://samidatools.com/">samidatools.com ↗</a>
+            <div class="project-tags">
+              <span>HTML</span><span>MediaPipe</span><span>In-browser</span>
             </div>
           </article>
         </div>
@@ -575,6 +589,7 @@
           <ul class="now-list">
             <li>Running SAMIDA on an always-on Ubuntu box, reachable only over Tailscale</li>
             <li>Building Pirate Survival's archipelago in Unreal Engine</li>
+            <li>Getting Arqen ready for its first outside users — English by default, MIT-licensed</li>
             <li>Shaping the first tool for samidatools — thumbnails for YouTubers</li>
             <li>Keeping PinguHub's dozen-odd services alive</li>
           </ul>
