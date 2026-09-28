@@ -186,6 +186,8 @@
     color: var(--accent);
   }
 
+  .hero .lede .lede-name { color: var(--ink); font-weight: 600; }
+
   .hero .lede {
     margin-top: 22px;
     max-width: 46ch;
@@ -488,20 +490,21 @@
         <div>
           <div class="eyebrow hero-eyebrow">Stefan Semb — building local-first</div>
           <h1>SAMIDA is the name<br>for how I build<em>.</em></h1>
-          <p class="lede">A local-first AI assistant is the flagship — but the same instinct runs through everything below it: keep it private, keep it self-hosted, keep it running on hardware I actually control.</p>
+          <p class="lede"><strong class="lede-name">Arqen</strong>, an open-source AI assistant with a Mission Control for agents, is the flagship — but the same instinct runs through everything below it: keep it private, keep it self-hosted, keep it running on hardware I actually control.</p>
           <div class="hero-actions">
-            <a class="btn btn-primary" href="#projects">See the projects</a>
-            <a class="btn btn-ghost" href="#about">About me</a>
+            <a class="btn btn-primary" href="https://github.com/stefansemb/Arqen">Arqen on GitHub ↗</a>
+            <a class="btn btn-ghost" href="#projects">See the projects</a>
           </div>
         </div>
 
         <div class="readout" aria-hidden="true">
-          <div class="readout-head"><span class="readout-dot"></span>samida — status</div>
+          <div class="readout-head"><span class="readout-dot"></span>arqen — status</div>
           <div class="readout-body">
-            <div class="readout-row"><span class="k">providers</span><span class="v">ollama<span class="sep">·</span>claude<span class="sep">·</span>gpt</span></div>
-            <div class="readout-row"><span class="k">tools</span><span class="v">read, write<span class="sep">·</span>confirm required</span></div>
-            <div class="readout-row"><span class="k">network</span><span class="v">tailscale-only</span></div>
-            <div class="readout-row"><span class="k">uptime</span><span class="v">systemd --user<span class="sep">·</span>auto-restart</span></div>
+            <div class="readout-row"><span class="k">models</span><span class="v">ollama<span class="sep">·</span>claude<span class="sep">·</span>gpt<span class="sep">·</span>gemini</span></div>
+            <div class="readout-row"><span class="k">agents</span><span class="v">tasks<span class="sep">·</span>workflows<span class="sep">·</span>schedules</span></div>
+            <div class="readout-row"><span class="k">tools</span><span class="v">52 built-in<span class="sep">·</span>mcp</span></div>
+            <div class="readout-row"><span class="k">approval</span><span class="v">anything irreversible</span></div>
+            <div class="readout-row"><span class="k">license</span><span class="v">mit<span class="sep">·</span>open source</span></div>
           </div>
         </div>
       </div>
@@ -517,12 +520,13 @@
         <div class="projects">
           <article class="project-card anchor">
             <div class="project-top">
-              <h3>SAMIDA</h3>
+              <h3>Arqen</h3>
               <span class="status-chip active">Active</span>
             </div>
-            <p class="desc">A local-first AI assistant that runs Ollama, GPT, and Claude side by side in one interface — with real file tools it can only use after I've approved the exact change.</p>
+            <p class="desc">A Windows AI assistant with a Mission Control for agents. Tasks, workflows and schedules run in the background, each agent gets exactly the tools it needs — files, web, GitHub, Google, MCP — and anything that can't be undone waits for my approval. Open source, in English and Swedish.</p>
+            <a class="project-link" href="https://github.com/stefansemb/Arqen">github.com/stefansemb/Arqen ↗</a>
             <div class="project-tags">
-              <span>FastAPI</span><span>Vite</span><span>Tailscale</span><span>Caddy</span>
+              <span>Python</span><span>PyQt6</span><span>MCP</span><span>Ollama</span><span>MIT</span>
             </div>
           </article>
 
@@ -539,13 +543,12 @@
 
           <article class="project-card wide">
             <div class="project-top">
-              <h3>Arqen</h3>
+              <h3>SAMIDA</h3>
               <span class="status-chip active">Active</span>
             </div>
-            <p class="desc">A Windows AI assistant with a Mission Control for agents. Tasks, workflows and schedules run in the background, each agent gets exactly the tools it needs — files, web, GitHub, Google, MCP — and anything that can't be undone waits for my approval. Open source, in English and Swedish.</p>
-            <a class="project-link" href="https://github.com/stefansemb/Arqen">github.com/stefansemb/Arqen ↗</a>
+            <p class="desc">A local-first AI assistant that runs Ollama, GPT, and Claude side by side in one interface — with real file tools it can only use after I've approved the exact change.</p>
             <div class="project-tags">
-              <span>Python</span><span>PyQt6</span><span>MCP</span><span>Ollama</span><span>MIT</span>
+              <span>FastAPI</span><span>Vite</span><span>Tailscale</span><span>Caddy</span>
             </div>
           </article>
 
@@ -581,7 +584,7 @@
           <div class="eyebrow" style="margin-bottom:14px;">About</div>
           <h2 style="font-size:clamp(24px,3vw,30px); margin-bottom:18px;">Who's building this</h2>
           <p>I'm Stefan. I build software that runs on hardware I actually own — usually late in the evening, with more terminal tabs open than I'd like to admit.</p>
-          <p>Local-first isn't really a philosophy for me so much as a preference: I'd rather host something myself and understand exactly how it works than hand it to someone else's server. <strong>SAMIDA</strong> is where that preference gets applied most literally — everything else on this page shares the same instinct.</p>
+          <p>Local-first isn't really a philosophy for me so much as a preference: I'd rather host something myself and understand exactly how it works than hand it to someone else's server. <strong>Arqen</strong> is where that preference gets applied most literally — everything else on this page shares the same instinct.</p>
         </div>
 
         <div class="now-card">
